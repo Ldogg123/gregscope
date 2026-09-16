@@ -1,0 +1,21 @@
+{
+	"modListVersion": 2,
+	"modList": [{
+		"modid": "${modId}",
+		"name": "${modName}",
+		"description": "Read-only industrial telemetry for GregTech: New Horizons machines.",
+		"version": "${modVersion}",
+		"mcversion": "${minecraftVersion}",
+		"url": "https://github.com/Ldogg123/gregscope",
+		"updateUrl": "",
+		"authorList": ["Ldogg123"],
+		"credits": "",
+		"logoFile": "",
+		"screenshots": [],
+		"parent": "",
+		"requiredMods": ["gregtech", "OpenComputers"],
+		"dependencies": ["gregtech", "OpenComputers"],
+		"dependants": [],
+		"useDependencyInformation": false
+	}]
+}
