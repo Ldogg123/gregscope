@@ -40,6 +40,7 @@ handlers, and does no work unless a computer asks for a snapshot.
   status.
 - [Testing](docs/testing.md) — unit and in-game (Horizon-QA) tests, how to run them, GS-004 coverage and the v0.1
   definition-of-done checklist with evidence.
+- [v0.3 design](docs/design-v0.3.md) — flow meters: metering conveyor and pump covers built on GT's own covers.
 - [v0.2 design](docs/design-v0.2.md) — decided design for sensors, the Telemetry Hub, history, and the v0.4 exporter
   data model.
 - [Design handoff](docs/handoff.md) — original plan and roadmap.

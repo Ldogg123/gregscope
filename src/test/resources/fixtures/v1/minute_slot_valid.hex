@@ -1,0 +1,20 @@
+# design-v0.2 §7.4 minute slot (slotLayout 1), 64 B big-endian. Generated independently of the Java
+# encoder by tools/gen_fixtures.py (bitwise CRC-16/CCITT-FALSE, check value 0x29B1 asserted).
+01 bf 5d 3c                                                             # off 0  i32 epochMinute = 29318460
+3a                                                                      # off 4  u8  samples = 58
+3c                                                                      # off 5  u8  expectedSamples = 60
+05                                                                      # off 6  u8  gapMask = chunk_unloaded|target_missing (0x05)
+05                                                                      # off 7  u8  lastStateCode = 5 (running)
+00 00 00 00 02 32 00 03 00 03                                           # off 8  u8x10 stateSamples
+01                                                                      # off 18 u8  maintenanceMax = 1
+05                                                                      # off 19 u8  flags = recipesCounterReset|serverStartMinute (0x05)
+04 9c                                                                   # off 20 u16 serverTicks = 1180
+32                                                                      # off 22 u8  euSamples = 50
+00                                                                      # off 23 u8  reserved = 0
+00 00 00 00 00 00 07 3a                                                 # off 24 i64 euPerTickAvg = 1850
+ff ff ff ff ff ff ff c0                                                 # off 32 i64 euPerTickMin = -64
+00 00 00 00 00 00 08 55                                                 # off 40 i64 euPerTickMax = 2133
+00 00 00 00 00 18 6a 00                                                 # off 48 i64 energyStoredLast = 1600000
+00 00 00 0c                                                             # off 56 i32 recipesCompletedDelta = 12
+00 00                                                                   # off 60 u16 reserved = 0
+9f 84                                                                   # off 62 u16 CRC-16/CCITT-FALSE over 0..61 = 0x9f84

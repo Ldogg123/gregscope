@@ -445,7 +445,7 @@ Server lag is **not** a gap. It shows up as `samples < expectedSamples` together
   - recipesDelta is summed if both are ≥0.
 
 ### 7.5 Reader contract (same for Hub, OC, v0.4 exporter and v0.5 alerts)
-1. Aggregates use observed samples only. There is **no interpolation or zero-filling**. Coverage = `samples / expectedSamples`.
+1. Aggregates use observed samples only. There is **no interpolation or zero-filling**. Coverage = `samples / expectedSamples`, where `expectedSamples` is each stored slot's own value (the interval in effect when that minute was recorded) and, for a missing minute, the current `1200 / intervalTicks`.
 2. A stored entry with state 0, or `samples == 0`, is a gap with its stored reasons.
 3. For a missing slot inside the window:
    - outside every recorded server run: `server_offline`;
@@ -545,7 +545,7 @@ Header, 64 B:
 - **Loading:** `registry.dat`, else `.bak`, else an empty registry with one WARN. The registry rebuilds itself from heartbeats, since identity lives in the covers.
   - `v > 1`: rename to `.unsupported-v<N>` and start empty.
   - LIVE is never persisted; every loaded non-tombstone entry starts as UNLOADED.
-- **Runs:** on start, append `{start=now, stop=0}`; on stop, set `stop`. For an unclean run, readers use `saved` as the approximate stop time.
+- **Runs:** on load, before appending the new run and before anything is saved, set `stop = max(start, saved)` on every run with `stop=0` (`GapRanges.Run.stopOnLoad`), using the `saved` that was loaded; then, on start, append `{start=now, stop=0}`; on stop, set `stop`. The unclean run's approximate stop time is the loaded `saved`; readers never use the registry's current `saved`, which moves past the downtime once the new process saves.
 
 ### 8.4 I/O thread (`HistoryIo`)
 - One daemon thread named `GregScope-IO` with `ArrayBlockingQueue(history.ioQueueCapacity=4096)`.
@@ -747,6 +747,7 @@ hub         { I:renameCooldownSeconds=5 [0..300] }
 # exporter { … }  reserved for v0.4; not read by v0.2
 ```
 - Values out of range are clamped with one WARN.
+- `permissions.opLevel`: 1-4 means players on the server's ops list with at least that level (vanilla `canCommandSenderUseCommand` is false for every other player at any level); `0` means every player counts as op (`AccessPolicy.isOp` decides it without the game's check).
 - The config produces an immutable `Settings`.
 - GTNHLib `@Config` is not used: it fills fields by reflection, and the config GUI is client-only.
 
@@ -768,7 +769,7 @@ hub         { I:renameCooldownSeconds=5 [0..300] }
 - **Unit (plain JVM):** everything marked `[pure]`, with golden fixtures in `src/test/resources/fixtures/v1/`:
   - `.gsh`: valid, torn slot, bad header CRC, v2 header, wrong magic, UUID mismatch
   - `registry.dat`: valid, truncated gzip, v2
-- **Horizon-QA:** batches `gregscope.sensor`, `.lifecycle`, `.sampler`, `.history`, `.hub`, `.oc2`, `.commands`, `.recipes`, `.safety`, `.bench`.
+- **Horizon-QA:** batches `gregscope.sensor`, `.lifecycle`, `.lifecycle.hooks` (GS-101; alone because it changes process-wide settings), `.access` (GS-104), `.sampler`, `.history`, `.hub`, `.oc2`, `.commands`, `.recipes`, `.safety`, `.bench`. CI selects the whole `gregscope` namespace.
 - **Manual:** GS-121 checklist.
 - **Negative controls** (the v0.1 practice), each run once:
   - set `lets*` to false and confirm the transparency test fails;
@@ -1158,3 +1159,196 @@ Sizes: S ≤0.5 d, M 1-2 d, L ≈3 d. Every ticket ends with `./gradlew build` g
 | Config | Forge `Configuration` |
 | Flow semantics (§15 Q6, v0.3) | record both attempted and accepted, via active metering covers, pending the spike and user sign-off |
 | Official-pack ambition (§15 Q8) | private server addon first; the design avoids MTE IDs and mixins so it stays reviewable later |
+
+---
+
+## Implementation notes
+
+### GS-101 (2026-09-17)
+- **"Clamped with one WARN" (§12.3)** is implemented as one WARN per config load that names every adjusted key
+  (`Settings.fromRaw`), not one WARN per key. `intervalTicks` has a set of allowed values, not a range, so "clamped"
+  means snapped to the nearest allowed value, with a tie going to the larger interval (30 → 40). A value that does not
+  parse falls back to its default and is part of the same WARN. Evidence: `SettingsTest`; a live run with
+  `maxSensors=5`, `intervalTicks=30`, `persist=maybe` logged exactly one GregScope WARN and loaded 16 / 40 / true
+  (`docs/testing.md`, GS-101 negative controls).
+- **Forge rewrites unparseable values.** `Configuration.get(category, key, int|boolean, …)` replaces a value that does
+  not parse as its type with the default and marks the file changed (Forge 10.13.4.1614 `net/minecraftforge/common/config/Configuration.java:180-191,298-310`),
+  so such a value is rewritten on save. Out-of-range integers are left as the user wrote them and are clamped only in
+  memory. `GregScopeConfig` reads the raw text before calling the typed getter, so the WARN still reports it.
+- **Test hooks property.** `addon.gradle` sets `systemProperty("gregscope.testHooks", "true")` on the `runServer` and
+  `runClient` tasks (RFG's `RunMinecraftTask` is a `JavaExec`, so this is independent of `--mcJvmArgs` and reaches CI's
+  plain invocation). The §13.1 fallback was not needed. `LifecycleTests.testHooksReachGametestJvm` asserts it and failed
+  with the line commented out. Hooks return `false` instead of silently doing nothing when disabled.
+- **Client handshake** stays a manual check (GS-121), but `SafetyTests.handshakeRequiresMatchingClient` now asks FML's
+  own `NetworkModHolder` for GregScope, the checker `FMLHandshakeServerState` uses via
+  `FMLNetworkHandler.checkModList(client, Side.CLIENT)` (Forge 10.13.4.1614 `cpw/mods/fml/common/network/internal/FMLNetworkHandler.java:131-151`,
+  `NetworkModHolder.java:54-63`): a client without GregScope, a vanilla client and a different version are rejected. It
+  failed with `acceptableRemoteVersions="*"` restored.
+- **Additions not named in §2:** `LifecyclePhase` (pure enum; `GregScope.phase()` lets `LifecycleTests.serverStarts`
+  assert that every handler up to `serverStarted` ran) and `config/ConfigKeys` (pure key table with defaults, allowed
+  values and comments; a natural source for GS-120's `DocsCoverageTest`).
+- **Creative tab** `GregScopeCreativeTab` shows a vanilla comparator until GS-105 adds the sensor item.
+  `getTabIconItem()` references no client class and is not annotated `@SideOnly(CLIENT)`, so
+  `ShippedClassesTest.noClientClassReferences` needs no change in GS-101. `assets/gregscope/lang/en_US.lang` exists with
+  only `itemGroup.gregscope`; GS-105 fills it.
+- **Dependencies.** `ModularUI2:2.3.88-1.7.10:dev` and `GTNHLib:0.11.46:dev` are direct `implementation` dependencies;
+  the GTNHLib entry left the constraints block (a direct dependency pins it), and MUI2 needs no constraint because GT
+  5.09.54.133's pom asks for the same version. `LifecycleTests.serverStarts` asserts the loaded versions.
+  `mcmod.info` lists `modularui2` and `gtnhlib` as well.
+
+### GS-102 (2026-09-17)
+- **§6.3 gate result: keep the defaults.** `ProbeBenchmarkTests` (opt-in, `-Dgregscope.bench=true`) measured
+  `GregTechMachineProbe.snapshot(te)` with 1,000 warm-up + 10,000 timed calls per scenario, three runs, local
+  i7-14700K, Java 8 dev server. Worst p99 was **16.3 µs** (running EBF); the others were ≤ 11.1 µs (TecTech Active
+  Transformer), ≤ 4.8 µs (LV Electric Furnace idle) and ≤ 2.2 µs (running). p99 ≤ 50 µs, so `limits.maxSensors`
+  stays 256 and no lean-probe subtask is opened. Full table and caveats: `docs/testing.md`, "Probe benchmark (GS-102)".
+- **Worst single call.** One EBF call took 22.9 ms in one run (the other runs' maxima were 0.8-1.1 ms). It was not
+  investigated; a GC or safepoint pause is the likely cause given a 16 µs p99. The §6.3 budget check happens before
+  each sample, so such an outlier can overrun one tick's budget; GS-108's budget counters will measure it in practice.
+- **Opt-in mechanism.** Every benchmark test calls `helper.assumeTrue(Boolean.getBoolean("gregscope.bench"), …)`
+  first, so a normal run reports them as skipped (Horizon-QA `GameTestAssumptionException`), not failed or absent.
+  The EBF scenario's template is still placed before the skip; that costs nothing measurable (normal full run: 51
+  passed, 4 skipped, 44 s wall).
+- **"One formed TecTech multiblock"** is the Active Transformer (`MTEActiveTransformer`, the smallest TecTech
+  multiblock: 3x3x3). No TecTech Horizon-QA template ships in GT5U 5.09.54.133 (only `electric_blast_furnace`), so the
+  test places the controller like a player, builds the cube behind its facing with `World.setBlock` and places an EV
+  energy hatch. It needs an empty 5x3x5 template (`gregscope:empty_5x3x5`, gametest resources only): without a
+  template a Horizon-QA cell is one block high and the isolation check failed the test for GT tiles above it.
+  TecTech's `onFirstTick_EM` disables a controller that is not yet formed on its first tick (always the case here),
+  so the test re-enables it after the startup check formed it. It then reads `waiting` / `no_routing` because no EU
+  is supplied; a routing transformer was not measured.
+
+### GS-103 (2026-09-17)
+- **Classes.** All §14 names are implemented as `[pure]` classes: `model/StateCodes`; `history/GapReason`, `SecondRing`,
+  `MinuteSlot`, `MinuteAccumulator`, `MinuteRing`, `Crc16Ccitt`, `GapRanges`, `Summaries`; `sensor/Labels`,
+  `SensorIdentity`, `SensorNbtCodec`; `sampling/SensorCounters`, `LogHistogram`, `Clock`. Added and not named in §14:
+  `sensor/KeyValue` (the §2 "KeyValue seam"; GS-105's cover adapts `NBTTagCompound` to it), `history/MinuteSource`
+  (read access passed to `GapRanges`/`Summaries`, implemented by `MinuteRing`, so GS-113 can pass ring accessors as
+  arguments), `history/SizeCeilings` (§7.8 constants and the startup INFO line text), `history/LongMath`
+  (package-private saturating and big-endian helpers) and `sampling/FakeClock` (§6.2, used by later test hooks).
+  `PureSourcesTest` enforces the `[pure]` rule by source grep and requires every file in `history/`, `sensor/` and
+  `sampling/` to be `[pure]` unless listed as an MC adapter, so GS-105/108/109 must list theirs explicitly.
+  `ShippedClassesTest` only gained five expected-class entries; none of its checks changed.
+- **§7.4 merge rule, fields the design does not name.** `expectedSamples` and `maintenanceMax` take the larger value;
+  `lastStateCode` comes from the newer piece only if it has samples, and `energyStoredLast` only if present (otherwise
+  the older value); a `recipesCompletedDelta` of −1 on one side yields the other side's value.
+- **EU values.** Averages round half away from zero and are computed exactly (`BigInteger`), so `Long.MAX_VALUE` inputs
+  do not overflow. `Long.MIN_VALUE` is the "none" sentinel, so a sample of exactly `Long.MIN_VALUE` is stored as
+  `MIN_VALUE+1`. With `euSamples == 0`, `euPerTickMin` and `euPerTickMax` are also written as `Long.MIN_VALUE` (§7.4
+  defines the sentinel only for the average).
+- **Slot validity.** Besides `epochMinute != 0`, the CRC and the window, `MinuteSlot.decode` also rejects a CRC-valid
+  slot that slotLayout 1 cannot hold (state code ≥ 10, gap bits 6-7, undefined flag bits, recipes delta < −1). Reserved
+  bytes are written as 0 but not checked. `MinuteRing` keeps the encoded 92,160 B and checks CRC and window on every
+  read; `mergeLoaded` implements "slots already in RAM win" (§8.4) and ignores a valid slot at the wrong index.
+- **Accumulator semantics.** `partialMinute` is set when a minute is closed early (`closePartial`: unload, removal,
+  stop), not for a minute opened late. `serverStartMinute` is set on the minute passed in as the run's start minute.
+  The §6.2 clock-skew rule is enforced in `MinuteAccumulator`: with no open minute, a sample or gap older than the
+  newest closed or loaded minute is dropped and counted (`clockSkewRefused()`; GS-108 maps it to
+  `clockSkewRefusedTotal` and the WARN); the same minute may reopen and `MinuteRing.put` merges the pieces. The first
+  `recipesCompleted` seen in a process only sets the baseline (delta 0), because GT's counter has no earlier value.
+- **§7.5 reader contract.** `GapRanges` returns ranges in epoch seconds, `from` inclusive and `to` exclusive, sorted by
+  `from`, merged per reason; a stored gap minute with several reasons yields one range per reason, and one with an
+  empty mask yields `unknown`. A missing minute is "inside a run" if it overlaps the run at all. "UNLOADED since a time
+  ≤ that minute" compares the minute containing `since` with the missing minute. Unclean runs end at the `saved` loaded at the next
+  start (never before their own start; see "Review fixes" below); the current run ends at now. The caller clips the window (not before the sensor's creation,
+  not including the open minute). Rule 2 is implemented literally: a slot with samples but `lastStateCode == 0` is a
+  gap. `Summaries` uses observed samples for state fractions (NaN when none) and the whole window for coverage, with each
+  stored slot's own `expectedSamples` (see "Review fixes" below).
+- **Labels (§3.5).** Implemented in the listed order, which has two visible effects: tab and newline are ISO controls,
+  so they are removed rather than turned into spaces (`"a\tb"` → `"ab"`); and a `§` removes the following code point
+  whatever it is. "Whitespace" is `Character.isWhitespace || Character.isSpaceChar` (so NBSP and U+3000 collapse). A
+  trailing space exposed by the 32-code-point cut is trimmed, which keeps `sanitize` idempotent. The display name is
+  the label, else `<snapshot name or metaName> #<shortId>`, else `#<shortId>`.
+- **Cover NBT (§3.3).** `gs` is read as an unsigned byte (so 200 is "unsupported", not "foreign"); `gs=0` and `gs=1`
+  without both id longs are inert. A compound read as unsupported is never modified by the codec; writing it back
+  unchanged is the cover's job (GS-105). Half an owner UUID reads as unowned; an owned identity without `owN` has an
+  empty owner name.
+- **`LogHistogram`.** 16 exact buckets for 0..15, then 16 linear sub-buckets per power of two (reported quantiles are
+  at most 1/16 high, capped at the exact max); `Long.MAX_VALUE` lands in bucket 959 of the 1,024. The 60 s window is
+  kept by the caller (`copyFrom` + `clear`).
+- **§7.8 check.** All table values follow from the layouts (asserted in `LayoutSizesTest`). One nit: the registry row's
+  "<64 KB" at 256 sensors is exactly 64,000 B for the ≈250 B raw estimate; the gzipped file is what the row describes,
+  so no change.
+- **Fixtures.** `src/test/resources/fixtures/v1/*.hex` (minute slot valid/torn/stale, second sample, gap second) were
+  generated by an independent Python script (`tools/gen_fixtures.py`, committed), not by the Java encoder. A negative control showed why: with a wrong CRC
+  initial value, the Java round-trip and torn-slot tests still passed and only the golden-fixture tests failed
+  (`docs/testing.md`, GS-103 negative controls).
+
+### GS-104 (2026-09-17)
+- **GTNHLib 0.11.46 team API matches §5.** Checked with `javap` on `GTNHLib-0.11.46-dev.jar` and the sources:
+  `TeamManager.getTeamMap()` (unmodifiable view of a `HashMap<UUID, Team>`), `Team.isMember/isOfficer/isOwner(UUID)`,
+  `addMember/addOfficer/addOwner`, `TeamManager.getOrCreateTeam(String, UUID)`, `mergeTeams(surviving, consumed)`.
+  Owners are always officers and members, officers always members (`Team.java` addOwner/addOfficer).
+- **E4 also covers `getOrCreateTeam`.** It calls `getTeamByPlayer` first, so it logs `Unable to find team for player`
+  for every new player (`gtnhlib/.../teams/TeamManager.java` getOrCreateTeam). `NoErrorLoggingTeamLookupTest` therefore
+  forbids `getTeamByPlayer`, `getOrCreateTeam` and `getTeamId` (no team ID is read, so none can be stored) anywhere in
+  `src/main`. `TeamAccessTests` still creates its teams with `getOrCreateTeam` as §14 says, and uses that ERROR line as
+  the positive control for its Log4j appender (observed once per new team; a direct `getTeamByPlayer(random)` also
+  logs once).
+- **API shape (not named in §5).** `TeamResolver<T>` is generic over the team handle (`teamOf`, `isMember`,
+  `isOfficerOrOwner`, default `sameTeam`), so `AccessPolicy` stays pure. A pure `Viewer` carries the player UUID and an
+  `IntPredicate` permission check (adapters pass `level -> sender.canCommandSenderUseCommand(level, "gregscope")`), or
+  is `Viewer.CONSOLE` (always op). "op" is `hasPermissionLevel(permissions.opLevel)`. `AccessPolicy` methods, one per
+  §5 row: `canOpenHub`, `inHubScope` (GUI and OC scope; it takes no viewer, which is how op no-escalation is
+  guaranteed), `canRename`, `canView` (list/info/stats), `canPurge`. Adjacency rows stay with the OC adapters.
+- **Rules where §5 leaves a detail open.** Null UUIDs are never in the same team (`sameTeam(null, x)` is false). With
+  `renameRequiresOfficer=true` only the same-team case is limited; the owner and ops are not. The team checked for
+  rename is the viewer's own team (`teamOf(viewer)` must contain the owner, and the viewer must be its officer or
+  owner), the same team `sameTeam(viewer, owner)` looks at. An unowned Hub can be opened by ops only (the table); its
+  scope is empty.
+- **Cache.** `GtnhlibTeamResolver` caches `teamOf` results, including "no team", per instance until `clearCache()`;
+  membership and role checks read the live `Team`. Callers make one resolver per Hub rebuild or sampler-frame
+  sequence. `TeamAccessTests.cacheLastsOneRebuildAndTeamChangesApplyNext` shows a join, leave and merge applying on the
+  next resolver.
+- **GT5U crash found while testing merges (test-only impact).** `TeamManager.mergeTeams` calls `ITeamData.mergeData`,
+  and GT's `GTPowerfailTracker.PowerfailData.mergeData` queues the surviving team's ID; at the end of the tick
+  `onPostTick` looks the ID up, and if the team is gone it treats the ID as a player and throws a
+  `NullPointerException` in `sendPlayerPowerfailStatus`, crashing the server (GT5U 5.09.54.133
+  `gregtech/common/data/GTPowerfailTracker.java:288-293,327-338,388-398`; observed in a local run, crash report
+  `run/server/crash-reports/crash-2026-09-17_02.25.12-server.txt`). It needs a surviving team to be removed in the same
+  tick, which GTNHLib's own API never does; the gametest's cleanup did. The merge test now uses registered teams
+  without team data (`new Team(name, id, false)` + `TeamManager.addTeamDeduplicated`), which skips `mergeData`.
+  GregScope never merges or removes teams.
+- **Pure-rule tests updated on purpose.** `PureSourcesTest` adds `access/` to the pure packages with
+  `access/GtnhlibTeamResolver.java` as its one listed adapter; `ShippedClassesTest` only adds two expected classes.
+- **Not wired yet.** No shipped code calls `AccessPolicy` or the resolver; the registry team cap (GS-107), commands (GS-111)
+  and the Hub (GS-112 to GS-114) will.
+
+### Review fixes after GS-101 to GS-104 (2026-09-17)
+- **Coverage uses each slot's stored `expectedSamples` (DC-1).** `Summaries.minutes` used `minutes x` the caller's
+  current `expectedSamplesPerMinute`, but `intervalTicks` is restart-only and history outlives restarts, so a window can
+  mix intervals: 12 h fully observed at 20 ticks then 12 h at 100 ticks with half missing read as 100 % coverage (capped),
+  and the reverse change with nothing missing read as 60 %. Now the denominator adds each stored slot's
+  `expectedSamples` (§7.4, the value in effect when it was recorded; merge keeps the larger) and the current value only
+  for missing minutes or a stored 0. §7.5 rule 1 now says so. `SummariesTest.coverageUsesEachSlotsStoredExpectedSamples`
+  mixes 60 and 12; it failed with the old denominator (expected 156, was 60).
+- **Unclean runs are closed on load (F2).** §8.3 had one registry-wide `saved` and told readers to end unclean runs at
+  it. That is only right for the latest run: once the next process saves, `saved` lies after the downtime and an older
+  crashed run would seem to cover the outage, turning `server_offline` minutes into `unknown`/`chunk_unloaded`. §8.3 now
+  closes every `stop=0` run at the loaded `saved` before the new run is appended (`GapRanges.Run.stopOnLoad`, for GS-110
+  to call), and `Run.resolve(start, stop, ongoing, now)` no longer takes `saved`; a non-ongoing `stop=0` that skipped the
+  load step resolves to an empty run (claims no coverage). `GapRangesTest.uncleanRunFollowedByALaterRunKeepsTheOutageOffline`
+  covers crash, downtime, restart and a later save. GS-110's `PersistenceScenarioTest` item "an unclean run uses `saved`"
+  means the loaded `saved`.
+- **`permissions.opLevel=0` means every player (F1).** In the pinned 1.7.10 source,
+  `EntityPlayerMP.canCommandSenderUseCommand` returns false for a player not on the ops list before comparing levels
+  (only `seed` on non-dedicated, `tell`, `help`, `me` are exempt), so the adapter `Viewer` recommends could never make
+  non-ops count as op and 0 behaved like 1. `AccessPolicy.isOp` now returns true for `opLevel <= 0` without asking the
+  check; 1-4 keep vanilla semantics. The config comment, §12.3 and the `Viewer` Javadoc say so. `AccessPolicyTest`
+  pins it (a player whose check is always false is op at 0, is not asked, and is not op at 1); the earlier row "0 makes
+  level-0 players ops" encoded the unreachable reading and was replaced.
+- **Batch names (DC-2).** `gregscope.lifecycle.hooks` (GS-101) and `gregscope.access` (GS-104) are added to §13.2.
+- **`[pure]` enforcement strengthened (PURE-1, PURE-2).** `PureSourcesTest` now also (a) walks pure packages
+  recursively, (b) allows only `java.*` and `[pure]` GregScope imports, (c) rejects a `[pure]` file that names a listed
+  adapter by simple name in code (a same-package use needs no import), (d) extends the denylist with GT5U's other root
+  packages (`bartworks`, `bwcrossmod`, `detrav`, `galacticgreg`, `ggfab`, `goodgenerator`, `gtneioreplugin`,
+  `gtnhintergalactic`, `gtnhlanth`, `kekztech`, `kubatech`, `toxiceverglades`), `org.lwjgl`, `io.netty` and
+  `com.google`, and (e) reads the compiled `[pure]` classes (inner classes included) and requires every class in their
+  constant pool, descriptors and signatures to be `java/*` (not `java/lang/reflect`) or a GregScope class whose source
+  is `[pure]`. Check (e) immediately found that `[pure]` `model/StateCodes` depends on the v0.1 enum
+  `model/MachineState`, which was not marked; it has no imports and is now marked `[pure]`. A negative control (a
+  same-package `GtnhlibTeamResolver.class` reference in `AccessPolicy`) failed (b)/(c) and (e) while the old denylist
+  test still passed.
+- **Fixture generator committed (FIX-1).** `tools/gen_fixtures.py` (Python 3, standard library) regenerates
+  `src/test/resources/fixtures/v1/`; the regenerated files differ from the previous ones only in their header comments,
+  which now name the script. GS-109's `.gsh`/registry fixtures should be added to it, not produced by the Java encoder.

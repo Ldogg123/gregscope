@@ -1,0 +1,11 @@
+# design-v0.2 §7.3 second sample, 28 B big-endian. Generated independently of the Java encoder by
+# tools/gen_fixtures.py.
+68 d9 da 10                                                             # off 0  i32 epochSec = 1759107600
+05                                                                      # off 4  u8  stateCode = 5 (running)
+00                                                                      # off 5  u8  gapReason = 0 (none)
+ef                                                                      # off 6  u8  flags = 0xef (active, allowedToWork, formedKnown, formed, hasEu, hasEnergy, valid)
+02                                                                      # off 7  u8  maintenanceIssues = 2
+10 68                                                                   # off 8  u16 progress x10000 = 4200
+00 00                                                                   # off 10 u16 reserved = 0
+ff ff ff ff ff ff f8 80                                                 # off 12 i64 euPerTick = -1920 (generation)
+00 00 00 00 00 12 4f 80                                                 # off 20 i64 energyStored = 1200000

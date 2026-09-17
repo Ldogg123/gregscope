@@ -1,6 +1,9 @@
 package io.github.ldogg123.gregscope.model;
 
-/** Normalized, intentionally coarse machine state. The id is part of the stable snapshot contract. */
+/**
+ * Normalized, intentionally coarse machine state. The id is part of the stable snapshot contract. [pure] (v0.1 enum;
+ * marked when the bytecode check of {@code PureSourcesTest} found that the [pure] {@code StateCodes} depends on it.)
+ */
 public enum MachineState {
 
     UNAVAILABLE("unavailable"),

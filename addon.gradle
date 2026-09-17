@@ -42,5 +42,9 @@ dependencies {
     tasks.named(runTask) {
         dependsOn("gametestClasses")
         classpath(sourceSets.gametest.output)
+        // GregScopeTestHooks are no-ops unless this is set. The dev run tasks always set it, so CI's plain
+        // `runServer --mcJvmArgs=...` gets it too (a JavaExec system property, independent of --mcJvmArgs).
+        // LifecycleTests.testHooksReachGametestJvm asserts it arrived.
+        systemProperty("gregscope.testHooks", "true")
     }
 }

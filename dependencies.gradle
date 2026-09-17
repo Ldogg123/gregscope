@@ -37,6 +37,10 @@ dependencies {
     // Pinned to the GTNH 2.9.0-beta-3 manifest. Re-verify the probe against new sources before bumping.
     implementation("com.github.GTNewHorizons:GT5-Unofficial:5.09.54.133:dev")
     implementation("com.github.GTNewHorizons:OpenComputers:1.12.61-GTNH:dev")
+    // v0.2 uses both directly (Hub GUI, team lookups). GT already pulls in the same versions (GT5U 5.09.54.133 pom);
+    // declaring them pins the compile and dev runtime to the beta-3 manifest.
+    implementation("com.github.GTNewHorizons:ModularUI2:2.3.88-1.7.10:dev")
+    implementation("com.github.GTNewHorizons:GTNHLib:0.11.46:dev")
 
     // Horizon-QA in-game test runner for runServer/runClient only (not published, not shipped). The gametest source
     // set that compiles against it is configured in addon.gradle.
@@ -48,8 +52,8 @@ dependencies {
 
     // Transitive resolution otherwise picks versions older than the beta-3 manifest
     // (DreamAssemblerXXL 0734e5250abf0fa6382b2fb6405a9e8eec0a2e54). Keep the dev runtime identical to the pack.
+    // GTNHLib and ModularUI2 are pinned by the direct dependencies above instead of constraints.
     constraints {
-        implementation("com.github.GTNewHorizons:GTNHLib:0.11.46") { because("GTNH 2.9.0-beta-3") }
         implementation("com.github.GTNewHorizons:Applied-Energistics-2-Unofficial:rv3-beta-1050-GTNH") { because("GTNH 2.9.0-beta-3") }
         implementation("com.github.GTNewHorizons:CodeChickenCore:1.4.19") { because("GTNH 2.9.0-beta-3") }
         implementation("com.github.GTNewHorizons:ServerUtilities:2.4.9") { because("GTNH 2.9.0-beta-3") }

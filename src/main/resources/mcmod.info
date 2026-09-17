@@ -13,8 +13,8 @@
 		"logoFile": "",
 		"screenshots": [],
 		"parent": "",
-		"requiredMods": ["gregtech", "OpenComputers"],
-		"dependencies": ["gregtech", "OpenComputers"],
+		"requiredMods": ["gregtech", "OpenComputers", "modularui2", "gtnhlib"],
+		"dependencies": ["gregtech", "OpenComputers", "modularui2", "gtnhlib"],
 		"dependants": [],
 		"useDependencyInformation": false
 	}]

@@ -42,6 +42,19 @@ class ShippedClassesTest {
     private static final List<String> EXPECTED = Arrays.asList(
         ROOT + "GregScope",
         ROOT + "CommonProxy",
+        ROOT + "ClientProxy",
+        ROOT + "GregScopeTestHooks",
+        ROOT + "config/Settings",
+        ROOT + "config/GregScopeConfig",
+        // GS-103 pure history/identity model; scanned like every shipped class (no client or periodic-work refs).
+        ROOT + "model/StateCodes",
+        ROOT + "history/MinuteSlot",
+        ROOT + "history/SecondRing",
+        ROOT + "sensor/SensorNbtCodec",
+        ROOT + "sampling/LogHistogram",
+        // GS-104 access policy and the GTNHLib team adapter; scanned like every shipped class.
+        ROOT + "access/AccessPolicy",
+        ROOT + "access/GtnhlibTeamResolver",
         ROOT + "integration/opencomputers/GregTechMachineEnvironment",
         ROOT + "integration/opencomputers/GregTechMachineDriver",
         ROOT + "probe/GregTechMachineProbe",
@@ -173,6 +186,36 @@ class ShippedClassesTest {
             }
         }
         assertEquals(new ArrayList<String>(), violations, "periodic-work hooks in shipped classes");
+    }
+
+    /**
+     * v0.2 has a real client proxy (design-v0.2 §2). FML instantiates it by name from the {@code @SidedProxy} string
+     * only on a client, so no shipped class may reference it as a class (that could load it on a dedicated server), and
+     * it must set the marker property that the Horizon-QA {@code SafetyTests.clientProxyNotLoaded} checks.
+     */
+    @Test
+    void clientProxyIsOnlyNamedByTheSidedProxy() {
+        String clientProxy = ROOT + "ClientProxy";
+        List<String> violations = new ArrayList<>();
+        for (ClassInfo info : classes.values()) {
+            if (info.name.equals(clientProxy)) {
+                continue;
+            }
+            for (String utf8 : info.utf8) {
+                if (utf8.contains(clientProxy)) {
+                    violations.add(info.name + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), violations, "shipped classes referencing ClientProxy");
+        assertTrue(
+            classes.get(ROOT + "GregScope").utf8.contains("io.github.ldogg123.gregscope.ClientProxy"),
+            "@SidedProxy clientSide does not name ClientProxy");
+        assertTrue(
+            classes.get(ROOT + "GregScope").utf8.contains("io.github.ldogg123.gregscope.CommonProxy"),
+            "@SidedProxy serverSide does not name CommonProxy");
+        assertTrue(classes.get(clientProxy).utf8.contains("gregscope.clientProxyLoaded"), "marker property not set");
+        assertEquals(ROOT + "CommonProxy", classes.get(clientProxy).superName);
     }
 
     /** A negative control for the scanner itself: it must see what it looks for in a real class file. */
