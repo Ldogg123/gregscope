@@ -258,5 +258,10 @@ Checked only where there is evidence. Evidence types: **test** (automated), **in
 
 Not part of §12, but still open before a release:
 
-- [ ] **Manual:** boot the release jar in the real GTNH 2.9.0-beta-3 server pack (not the dev dependency set), attach
-  an Adapter to a machine and run the example script. Not done yet.
+- [x] **Manual:** boot the release jar in the real GTNH 2.9.0-beta-3 server pack (not the dev dependency set). Done
+  2026-09-17 with `gregscope-95c928f.jar` on the official `GT_New_Horizons_2.9.0-beta-3_Server_Java_17-26` pack
+  (Java 25, dedicated server): booted in 28 s, `gregscope` in FML's mod list, clean stop, and no `ERROR` line or
+  exception that the same pack does not already log without GregScope (diffed against a baseline boot).
+- [ ] **Manual:** in that real pack, attach an Adapter to a machine and run the example script on a computer. Not done
+  in the real pack; the same script runs on a real OpenOS computer against a real Adapter in the dev dependency set
+  (`OpenComputersExampleScriptTests`).
