@@ -6,20 +6,30 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Map;
 
+import net.minecraft.item.ItemStack;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.ForgeDirection;
 
+import com.gtnewhorizons.horizonqa.api.GameTestArguments;
 import com.gtnewhorizons.horizonqa.api.GameTestHelper;
 import com.gtnewhorizons.horizonqa.api.TestPos;
 import com.gtnewhorizons.horizonqa.api.annotation.GameTest;
 import com.gtnewhorizons.horizonqa.api.annotation.GameTestHolder;
+import com.gtnewhorizons.horizonqa.api.annotation.MethodSource;
 
 import gregtech.api.enums.ItemList;
 import gregtech.api.interfaces.tileentity.IGregTechTileEntity;
 import io.github.ldogg123.gregscope.integration.opencomputers.GregTechMachineDriver;
+import io.github.ldogg123.gregscope.integration.opencomputers.GregTechMachineEnvironment;
 import io.github.ldogg123.gregscope.probe.GregTechMachineProbe;
+import kekztech.common.TileEntities;
+import kekztech.common.tileentities.MTELapotronicSuperCapacitor;
 import li.cil.oc.api.network.Component;
 import li.cil.oc.api.network.ManagedEnvironment;
+import tectech.thing.CustomItemList;
+import tectech.thing.metaTileEntity.multi.bec.MTEBECDiode;
+import tectech.thing.metaTileEntity.multi.bec.MTEBECIONode;
+import tectech.thing.metaTileEntity.multi.bec.MTEBECStorage;
 
 /** Verifies GregScope's driver through OpenComputers' own driver registry, exactly as an Adapter would use it. */
 @GameTestHolder(value = "gregscope", requiredMods = { "gregtech", "OpenComputers", "gregscope" })
@@ -142,6 +152,82 @@ public class OpenComputersComponentTests {
         helper.assertTrue(methods.contains("getStoredEU"), "OC energy driver missing on hatch: " + methods);
         helper.assertFalse(methods.contains("getSnapshot"), "hatch component exposes getSnapshot: " + methods);
         helper.succeed();
+    }
+
+    /**
+     * Controllers with a dedicated, higher-priority OpenComputers driver. Each row: expected component name, one
+     * callback only that OC driver provides, and the controller's MTE class. OC's drivers for these match by
+     * {@code instanceof} alone, so a lone (unformed) controller is enough.
+     */
+    public static Object[] namedControllerKeepsOcComponentName() {
+        return new Object[] {
+            GameTestArguments.named("lsc", "lsc", "getStoredEUString", MTELapotronicSuperCapacitor.class.getName()),
+            GameTestArguments.named("bec_storage", "bec_storage", "getFieldStrength", MTEBECStorage.class.getName()),
+            GameTestArguments.named("bec_io_node", "bec_io_node", "getAvailableNanites", MTEBECIONode.class.getName()),
+            GameTestArguments
+                .named("bec_diode", "bec_diode", "getCondensateFilterCount", MTEBECDiode.class.getName()) };
+    }
+
+    @GameTest(batch = "gregscope.oc", timeoutTicks = 100)
+    @MethodSource
+    public static void namedControllerKeepsOcComponentName(GameTestHelper helper, String expectedName,
+        String driverCallback, String mteClass) {
+        IGregTechTileEntity holder = GtPlacement.placeMachine(helper, MACHINE, controllerStack(helper, expectedName));
+        helper.assertEquals(
+            mteClass,
+            holder.getMetaTileEntity()
+                .getClass()
+                .getName(),
+            "placed controller MTE class");
+        int metaId = holder.getMetaTileID();
+
+        helper.startSequence()
+            .thenIdle(5)
+            .thenExecute(() -> {
+                ManagedEnvironment env = OcComponents.adapterEnvironment(helper, MACHINE);
+                Component component = OcComponents.component(helper, env);
+                Collection<String> methods = component.methods();
+                Snapshots.log("oc#6 " + expectedName + " component " + component.name(), methods);
+                // GregScope's environment (priority GregTechMachineEnvironment.PRIORITY) must never win the name.
+                helper.assertEquals(
+                    expectedName,
+                    component.name(),
+                    "merged component name (GregScope priority " + GregTechMachineEnvironment.PRIORITY + ")");
+                helper.assertTrue(methods.contains(driverCallback), "OC driver callback missing: " + methods);
+                helper.assertTrue(methods.contains("getSnapshot"), "methods lack getSnapshot: " + methods);
+                helper.assertTrue(methods.contains("getStoredEU"), "methods lack getStoredEU: " + methods);
+                // Only getSnapshot is invoked: OC's BEC callbacks are not designed for a lone, unformed controller.
+
+                Object[] result = OcComponents.invoke(helper, component, "getSnapshot");
+                helper.assertTrue(result != null && result.length == 1, "getSnapshot result count");
+                Map<String, Object> snapshot = OcComponents.asMap(helper, result[0]);
+                Snapshots.log("oc#6 " + expectedName + " getSnapshot", snapshot);
+                helper.assertEquals(1L, OcComponents.asLong(helper, snapshot.get("schemaVersion"), "schemaVersion"));
+                helper.assertEquals("multiblock", snapshot.get("kind"), "kind in " + snapshot);
+                helper.assertEquals(mteClass, snapshot.get("machineClass"), "machineClass in " + snapshot);
+                helper.assertEquals((long) metaId, OcComponents.asLong(helper, snapshot.get("metaId"), "metaId"));
+                // A lone controller 5 ticks after placement has not run GT's 100-tick startup structure check yet.
+                helper.assertEquals("starting", snapshot.get("state"), "state in " + snapshot);
+                helper.assertEquals("startup_check", snapshot.get("statusId"), "statusId in " + snapshot);
+            })
+            .thenSucceed();
+    }
+
+    private static ItemStack controllerStack(GameTestHelper helper, String componentName) {
+        switch (componentName) {
+            case "lsc":
+                // kekztech registers the LSC without an ItemList constant.
+                return TileEntities.lsc.getStackForm(1);
+            case "bec_storage":
+                return CustomItemList.Machine_Multi_BECStorage.get(1);
+            case "bec_io_node":
+                return CustomItemList.Machine_Multi_BECIONode.get(1);
+            case "bec_diode":
+                return CustomItemList.Machine_Multi_BECDiode.get(1);
+            default:
+                helper.fail("no controller stack for " + componentName);
+                return null;
+        }
     }
 
     private OpenComputersComponentTests() {}

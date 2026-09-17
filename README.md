@@ -37,6 +37,8 @@ handlers, and does no work unless a computer asks for a snapshot.
   `getSnapshot()` contract, and troubleshooting.
 - [Example Lua script](docs/examples/gregscope-snapshot.lua) — lists every machine with `getSnapshot()` and prints its
   status.
+- [Testing](docs/testing.md) — unit and in-game (Horizon-QA) tests, how to run them, GS-004 coverage and the v0.1
+  definition-of-done checklist with evidence.
 - [Design handoff](docs/handoff.md) — original plan and roadmap.
 
 ## Building

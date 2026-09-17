@@ -3,6 +3,7 @@ package io.github.ldogg123.gregscope.gametest;
 import java.util.HashMap;
 import java.util.Map;
 
+import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.ForgeDirection;
 
@@ -10,6 +11,8 @@ import com.gtnewhorizons.horizonqa.api.GameTestHelper;
 import com.gtnewhorizons.horizonqa.api.TestPos;
 
 import li.cil.oc.api.Driver;
+import li.cil.oc.api.Items;
+import li.cil.oc.api.detail.ItemInfo;
 import li.cil.oc.api.driver.SidedBlock;
 import li.cil.oc.api.network.Component;
 import li.cil.oc.api.network.ManagedEnvironment;
@@ -29,6 +32,18 @@ final class OcComponents {
         ManagedEnvironment env = driver.createEnvironment(world, abs.x(), abs.y(), abs.z(), ForgeDirection.UNKNOWN);
         helper.assertNotNull(env, "OpenComputers driver created no environment for " + local);
         return env;
+    }
+
+    /**
+     * Places an OpenComputers block by its item name ({@code adapter}, {@code caseCreative}, ...) and returns its tile.
+     */
+    static TileEntity placeBlock(GameTestHelper helper, TestPos local, String name) {
+        ItemInfo info = Items.get(name);
+        helper.assertTrue(info != null && info.block() != null, "OpenComputers block not registered: " + name);
+        TestPos abs = helper.absolute(local);
+        World world = helper.getWorld();
+        helper.assertTrue(world.setBlock(abs.x(), abs.y(), abs.z(), info.block(), 0, 3), "could not place " + name);
+        return helper.assertTileEntityPresent(local);
     }
 
     static Component component(GameTestHelper helper, ManagedEnvironment env) {

@@ -38,6 +38,9 @@ names it after the environment with the highest priority. GregScope's environmen
 | BEC storage / IO node / diode | BEC multiblocks | `bec_storage`, `bec_io_node`, `bec_diode` | 10 |
 | **GregScope** | GT basic machines and multiblock controllers | `gt_machine` | -10 |
 
+The Horizon-QA game tests check these names in-game on a lone LSC controller and on each BEC controller type (storage,
+IO node, diode): the component keeps its OC name and still has `getSnapshot`.
+
 Consequences:
 
 - In a normal GTNH pack, OC's energy-container driver matches every GT machine. A machine therefore keeps its
@@ -113,6 +116,42 @@ The component itself usually disappears shortly afterwards, when the Adapter not
 GregScope builds the keys in a fixed order, but OpenComputers converts the map into a Lua table, and `pairs()` order is
 unspecified. Sort keys yourself when printing or comparing snapshots.
 
+## Reload and restart
+
+GregScope keeps no saved data. Everything a snapshot reports is read again from GT on each call, so after a chunk
+reload or a server restart it reflects whatever GT restored from its own save data.
+
+- **While the machine's chunk is unloaded**, `getSnapshot()` on a component obtained earlier returns
+  `nil, "machine unavailable"`. It never loads the chunk.
+- **After the chunk loads again**, an Adapter in the same chunk re-attaches its drivers within a tick or two. The
+  merged component keeps its **address** and name, because OpenComputers restores it from the Adapter's saved data as
+  long as the set of drivers behind it is unchanged (see the section on addresses above).
+- **Adapter in a different chunk from the machine (not verified in-game).** If only the machine's chunk unloads and
+  loads again, OpenComputers' source suggests the Adapter keeps its component bound to the machine's old tile entity,
+  so `getSnapshot()` may keep returning `nil, "machine unavailable"` until the Adapter's own chunk reloads or the
+  Adapter is broken and placed again. Running discovery again finds the same component. Placing the Adapter in the
+  same chunk as the machine avoids this.
+- GT restores the machine's identity, its on/off switch (including a disabled one) and a held recipe's progress. It does **not** save whether a
+  multiblock is formed: for about **100 ticks** after loading, a multiblock controller reads `state = "starting"`,
+  `statusId = "startup_check"` and `formed = false`, and `energyStored`/`energyCapacity` are absent because GT has not
+  re-registered its hatches yet. A controller that was running still shows `active = true`, its `euPerTick` and its
+  saved progress during that time. After GT's startup structure check it reports its real state again, and a held
+  recipe continues from the saved progress (it does not advance during the startup check).
+- From GT's source (not exercised by the tests): shutdown reason and a basic machine's progress are saved, while a
+  basic machine's `stuttering` and `outputBlockedTicks` restart at `false`/`0`.
+
+The Horizon-QA game tests (`ChunkReloadTests`) really unload and reload the chunks of an LV macerator with an Adapter,
+of an idle formed Electric Blast Furnace and of a running, soft-disabled one. They assert every point above except the
+Adapter in a different chunk and the "from GT's source" bullet: the soft error while unloaded without reloading the
+chunk, the Adapter component's address and name after reload, the startup-check state with `formed = false` and no
+energy keys, `active` and `euPerTick` held during it, `allowedToWork = false` restored, progress unchanged 50 ticks
+after the reload and resumed (not restarted, not advanced during the check) once the check is over. They also check that each
+reloaded machine is a new tile entity with the same `metaId`, `metaName` and coordinates. A server restart loads tile
+entities through the same save-and-load path (GT's machine data, the Adapter's saved component addresses). What the
+tests do **not** exercise is the restart itself: static and global state of GT, OpenComputers and other mods being
+rebuilt, the world and chunk-loader tickets being loaded at startup, and a computer's own saved state. The CI run
+itself starts a dedicated server with GregScope and runs all game tests on it.
+
 ## Example
 
 [`examples/gregscope-snapshot.lua`](examples/gregscope-snapshot.lua) lists every machine that has `getSnapshot`, prints
@@ -123,13 +162,24 @@ gregscope-snapshot             -- summary of all machines
 gregscope-snapshot <address>   -- also dump the full snapshot of one machine (an address prefix is enough)
 ```
 
+The game tests run this script unmodified on OpenOS with every CPU architecture in OpenComputers 1.12.61-GTNH (Lua 5.3,
+Lua 5.2, Lua 5.4 and LuaJ) and check that it prints exactly what GregScope's probe reports. They cover an idle basic
+machine and a running Electric Blast Furnace, whose summary looks like this:
+
+```
+22e37260 multiblock  Electric Blast Furnace
+         state=running statusId=running progress=0.375 euPerTick=2133
+         Running
+         warnings: maintenance, work_disabled
+```
+
 ## Troubleshooting
 
 | symptom | cause / fix |
 |---|---|
 | No component has `getSnapshot` | The Adapter must touch the basic machine or the multiblock **controller**, not a hatch or casing. Check that the Adapter is connected to the computer (`components` in the OpenOS shell) and that GregScope is installed on the **server**. |
 | `component.gt_machine` is nil | Expected in a normal pack: the component is named `gt_energycontainer` (or `lsc` / `bec_*`). Use discovery by callback. |
-| `getSnapshot` returns `nil, "machine unavailable"` | The machine was removed, replaced or unloaded. Run discovery again. |
+| `getSnapshot` returns `nil, "machine unavailable"` | The machine was removed, replaced or its chunk is unloaded. Run discovery again once the chunk is loaded; after a chunk reload an Adapter in the same chunk keeps its component address. If the Adapter is in a **different chunk** from the machine and only the machine's chunk reloaded, discovery may find the same stale component (not verified in-game): break and re-place the Adapter, or move it into the machine's chunk. See [Reload and restart](#reload-and-restart). |
 | A script broke after installing or removing GregScope | Component addresses changed once (see above). Look the addresses up again. |
 | A multiblock shows `starting` / `startup_check` | GT runs its first structure check about 100 ticks after the chunk loads. Wait and read again. |
 | A key is missing | Optional keys are omitted when not applicable; see the [schema](snapshot-schema-v1.md#optional-keys). |
