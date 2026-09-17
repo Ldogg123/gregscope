@@ -38,6 +38,11 @@ dependencies {
     implementation("com.github.GTNewHorizons:GT5-Unofficial:5.09.54.133:dev")
     implementation("com.github.GTNewHorizons:OpenComputers:1.12.61-GTNH:dev")
 
+    // Plain-JVM unit tests for the pure snapshot core (JUnit Platform enabled in addon.gradle).
+    testImplementation(platform("org.junit:junit-bom:5.13.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
     // Transitive resolution otherwise picks versions older than the beta-3 manifest
     // (DreamAssemblerXXL 0734e5250abf0fa6382b2fb6405a9e8eec0a2e54). Keep the dev runtime identical to the pack.
     constraints {

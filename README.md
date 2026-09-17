@@ -28,8 +28,11 @@ Other pack versions are not supported yet.
 - An OpenComputers `gt_machine` component exposing `getSnapshot()` through an Adapter.
 
 v0.1 is deliberately read-only. It adds no blocks, items, recipes, saved data, mixins, or tick
-handlers, and does no work unless a computer asks for a snapshot. See
-[the design handoff](docs/handoff.md) for the full contract and roadmap.
+handlers, and does no work unless a computer asks for a snapshot.
+
+- [Snapshot schema v1](docs/snapshot-schema-v1.md) — keys, states, classification rules, known limitations, and where
+  the implementation deliberately differs from the handoff (verified against the pinned GT5U sources).
+- [Design handoff](docs/handoff.md) — original plan and roadmap.
 
 ## Building
 
