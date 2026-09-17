@@ -12,6 +12,8 @@ import cpw.mods.fml.common.event.FMLInitializationEvent;
     version = Tags.VERSION,
     name = GregScope.NAME,
     acceptedMinecraftVersions = "[1.7.10]",
+    // Server-side only: no blocks, items or packets, so clients without GregScope may join.
+    acceptableRemoteVersions = "*",
     dependencies = "required-after:gregtech;required-after:OpenComputers")
 public class GregScope {
 

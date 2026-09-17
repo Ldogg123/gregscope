@@ -25,13 +25,18 @@ Other pack versions are not supported yet.
 
 - A normalized `MachineSnapshot` (schema v1) for GT basic machines (`MTEBasicMachine`) and
   multiblock controllers (`MTEMultiBlockBase`).
-- An OpenComputers `gt_machine` component exposing `getSnapshot()` through an Adapter.
+- An OpenComputers `getSnapshot()` callback on GT machines behind an Adapter. It merges into OC's existing component
+  (normally `gt_energycontainer`); the component is only named `gt_machine` when OC's GregTech integration is off.
 
 v0.1 is deliberately read-only. It adds no blocks, items, recipes, saved data, mixins, or tick
 handlers, and does no work unless a computer asks for a snapshot.
 
 - [Snapshot schema v1](docs/snapshot-schema-v1.md) — keys, states, classification rules, known limitations, and where
   the implementation deliberately differs from the handoff (verified against the pinned GT5U sources).
+- [OpenComputers integration](docs/opencomputers.md) — Adapter setup, component naming and discovery, the
+  `getSnapshot()` contract, and troubleshooting.
+- [Example Lua script](docs/examples/gregscope-snapshot.lua) — lists every machine with `getSnapshot()` and prints its
+  status.
 - [Design handoff](docs/handoff.md) — original plan and roadmap.
 
 ## Building

@@ -38,6 +38,9 @@ dependencies {
     implementation("com.github.GTNewHorizons:GT5-Unofficial:5.09.54.133:dev")
     implementation("com.github.GTNewHorizons:OpenComputers:1.12.61-GTNH:dev")
 
+    // Horizon-QA in-game test runner for runServer/runClient only (not published, not shipped). The gametest source
+    // set that compiles against it is configured in addon.gradle.
+    runtimeOnlyNonPublishable("com.github.GTNewHorizons:Horizon-QA:0.14.0:dev")
     // Plain-JVM unit tests for the pure snapshot core (JUnit Platform enabled in addon.gradle).
     testImplementation(platform("org.junit:junit-bom:5.13.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")

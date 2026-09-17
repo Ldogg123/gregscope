@@ -10,4 +10,9 @@ on:
 jobs:
   build-and-test:
     uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/build-and-test.yml@master
+    with:
+      timeout: 300
+      # Horizon-QA in-game tests (src/gametest, dev/CI only). Same inputs GT5-Unofficial uses.
+      horizonqa: true
+      horizonqa-tests: gregscope
     secrets: inherit

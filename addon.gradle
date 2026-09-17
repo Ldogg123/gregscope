@@ -1,3 +1,37 @@
 tasks.named("test", Test) {
     useJUnitPlatform()
 }
+
+/*
+ * Horizon-QA in-game tests (dev/CI only, never shipped or published).
+ *
+ * The `gametest` source set compiles against the mod, its compile classpath and Horizon-QA. Its output is appended
+ * to the runServer/runClient classpath (RFG builds that classpath from the `jar` task plus `runtimeClasspath`), where
+ * FML's classpath scan feeds @GameTestHolder classes to Horizon-QA. It is not part of `jar`, `reobfJar`,
+ * `sourcesJar` or any publication. Horizon-QA itself is a `runtimeOnlyNonPublishable` dependency (dependencies.gradle).
+ */
+def horizonQa = "com.github.GTNewHorizons:Horizon-QA:0.14.0:dev"
+
+sourceSets {
+    gametest {
+        java.srcDirs = ["src/gametest/java"]
+        resources.srcDirs = ["src/gametest/resources"]
+        compileClasspath += files({ sourceSets.main.output }) + files({ sourceSets.main.compileClasspath })
+    }
+}
+
+configurations {
+    // GTNHGradle passes -Xplugin:jabel to every JavaCompile task; give this source set the same processor path.
+    gametestAnnotationProcessor.extendsFrom(annotationProcessor)
+}
+
+dependencies {
+    gametestCompileOnly(horizonQa)
+}
+
+["runServer", "runClient"].each { runTask ->
+    tasks.named(runTask) {
+        dependsOn("gametestClasses")
+        classpath(sourceSets.gametest.output)
+    }
+}
