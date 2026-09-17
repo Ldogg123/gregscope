@@ -20,6 +20,13 @@ sourceSets {
     }
 }
 
+// The OpenOS game test runs the documented example script itself, so copy the exact repo file instead of a hand-kept copy.
+tasks.named("processGametestResources", ProcessResources) {
+    from("docs/examples/gregscope-snapshot.lua") {
+        into("gregscope-gametest")
+    }
+}
+
 configurations {
     // GTNHGradle passes -Xplugin:jabel to every JavaCompile task; give this source set the same processor path.
     gametestAnnotationProcessor.extendsFrom(annotationProcessor)

@@ -12,6 +12,9 @@ local shell = require("shell")
 
 local args = shell.parse(...)
 local wanted = args[1]
+if type(wanted) ~= "string" then
+  wanted = nil -- run as a disk's autorun.lua, OpenOS passes the filesystem proxy instead of shell arguments
+end
 
 local function fmt(value)
   if value == nil then
