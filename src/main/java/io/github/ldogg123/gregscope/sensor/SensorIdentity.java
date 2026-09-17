@@ -46,6 +46,25 @@ public final class SensorIdentity {
         return name.substring(0, end);
     }
 
+    /**
+     * The identity a cover gets when it is attached (design-v0.2 §3.4 {@code onPlayerAttach}).
+     *
+     * <p>
+     * The owner is the attaching player. A cover attached by nobody or by a FakePlayer (another mod's automation, a
+     * gametest) has no attributable player, so the caller passes {@code playerUuid == null} and the machine's own GT
+     * owner is used; if the machine is unowned too, the sensor is unowned. The label is the stack's display name, so
+     * an anvil rename before attaching becomes the label; it is sanitized by the constructor.
+     *
+     * @param playerUuid  the attaching player's UUID, or {@code null} for no player or a FakePlayer
+     * @param holderOwner the machine's GT owner UUID, or {@code null} if the machine is unowned
+     */
+    public static SensorIdentity forAttach(UUID id, String stackDisplayName, UUID playerUuid, String playerName,
+        UUID holderOwner, String holderOwnerName, long createdEpochSec) {
+        UUID owner = playerUuid != null ? playerUuid : holderOwner;
+        String ownerName = playerUuid != null ? playerName : holderOwnerName;
+        return new SensorIdentity(id, stackDisplayName, owner, ownerName, createdEpochSec);
+    }
+
     public UUID id() {
         return id;
     }

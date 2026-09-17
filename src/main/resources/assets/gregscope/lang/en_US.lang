@@ -1,1 +1,32 @@
 itemGroup.gregscope=GregScope
+
+# Machine Sensor (GS-105)
+item.gregscope.machine_sensor.name=Machine Sensor
+gregscope.tooltip.sensor.1=Attach to a GT machine or multiblock controller (sneak + right-click)
+gregscope.tooltip.sensor.2=Rename in an anvil to set a label
+gregscope.tooltip.sensor.3=Read-only: passes power, items, fluids and redstone
+
+# Chat messages (GS-107)
+gregscope.chat.sensor.over_cap=GregScope: the sensor limit is reached, so this sensor is not being recorded.
+
+# Machine states (ids from the snapshot schema v1)
+gregscope.state.unavailable=Unavailable
+gregscope.state.starting=Starting
+gregscope.state.unformed=Unformed
+gregscope.state.shutdown=Shut down
+gregscope.state.power_starved=Power starved
+gregscope.state.running=Running
+gregscope.state.disabled=Disabled
+gregscope.state.output_blocked=Output blocked
+gregscope.state.waiting=Waiting
+gregscope.state.idle=Idle
+
+# History gap reasons
+gregscope.gap.chunk_unloaded=Chunk unloaded
+gregscope.gap.dimension_unloaded=Dimension unloaded
+gregscope.gap.target_missing=Machine or sensor missing
+gregscope.gap.sampling_skipped=Sampling skipped
+gregscope.gap.probe_error=Probe error
+gregscope.gap.sensor_removed=Sensor removed
+gregscope.gap.server_offline=Server offline
+gregscope.gap.unknown=Unknown

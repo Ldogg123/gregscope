@@ -92,7 +92,7 @@
 ### 1.4 v0.1 constraints: kept or deliberately lifted
 | v0.1 constraint | v0.2 | How it holds |
 |---|---|---|
-| Read-only, no machine control | **Kept** | Every `lets*` on the cover returns true. `isRedstoneSensitive` and `manipulatesSidedRedstoneOutput` return false. No synced actions. OC is read-only. The only writes are to GregScope's own data (label, purge). |
+| Read-only, no machine control | **Kept, with one GT-wide exception** | Every `lets*` on the cover returns true. `isRedstoneSensitive` and `manipulatesSidedRedstoneOutput` return false. No synced actions. OC is read-only. The only writes are to GregScope's own data (label, purge). **Exception (GS-REV-4):** a covered side is excluded from `BaseMetaTileEntity.isRainExposed()` (`BaseMetaTileEntity.java:250-265`, which tests `hasCoverAtSide`; `Cover.isValid()` is `coverID != 0 && side != UNKNOWN`, so no cover can opt out), and that gates GT's rain fire and the rain/thunder explosions (`:506-550`, both on by default). A sensor on an exposed face therefore removes that face from GT's weather checks. This is not fixable in GregScope code and is identical for every GT cover (a conveyor or plate weatherproofs a face the same way), so it grants players no capability they do not already have; it is accepted for release and is on the GS-121 manual checklist. |
 | No mixins, ATs or reflection in shipped code | **Kept** | Only public APIs: GT `CoverRegistry`/`CoverPlacer`/`Cover`, MUI2, GTNHLib teams, OC, Forge. Reflection appears only in test code (GS-119). |
 | No world scans; never force-load chunks | **Kept** | Lookups go `DimensionManager.getWorld` → `blockExists` → `getTileEntity`, and never call `worldServerForDimension`. Housekeeping walks the registry only. |
 | Bounded memory | **Kept** | Hard caps, fixed rings, capped strings, a bounded I/O queue. |
@@ -214,10 +214,10 @@ GT stores the data under `d` (`Cover.java:79-105`). GregScope uses these keys in
 | `letsEnergyIn/Out`, `letsFluidIn/Out(Fluid)`, `letsItemsIn/Out(int)`, `letsRedstoneGoIn/Out` | all `true`. The defaults are false (`Cover.java:241-250,373-414`). |
 | `isRedstoneSensitive(long)` | `false` |
 | `manipulatesSidedRedstoneOutput()` | `false` |
-| `allowsCopyPasteTool()` | `false`. Covers GT's copy tool and Matter Manipulator (`BehaviourCoverTool.java:73-99`). |
+| `allowsCopyPasteTool()` | `false`. This covers the **copy** direction only (`BehaviourCoverTool.java:73-87`); the paste direction (`:88-99`) is gated on the numeric cover id alone and calls `ICoverable.updateAttachedCover` → `readFromNbt` on the live cover (`CoverableTileEntity.java:498-502`). `readDataFromNbt` therefore refuses to downgrade a cover that already has an identity (GS-REV-3). The Matter Manipulator is not in the pinned sources; no claim is made about it. |
 | `hasCoverGUI()` | `false` in v0.2.0 |
 | `isDataNeededOnClient()` | default (`false`). No GregScope packet data. |
-| `getDescription()` | `"GregScope sensor <shortId>[: <label>] [<availability>]"`. The availability comes from a transient field the registry sets. |
+| `getDescription()` | `"GregScope sensor <shortId>[: <label>] [<availability>]"` **on the server side only**. The availability comes from a transient field the registry sets. GT's only consumer is `CoverableTileEntity.getWailaBody` (`CoverableTileEntity.java:531-553`), which runs on the **client**, and the identity is never synced (`isDataNeededOnClient()` is false and `writeDataToByteBuf` is not overridden, so `GTPacketSendCoverData` carries only the tick rate). A client cover would therefore render every healthy sensor with the inert wording, so off the server side it returns the neutral `"GregScope sensor"` (GS-REV-1). The real status line for a player waits for the §1.2 v0.2.1 item "client-side cover label sync and a WAILA label". |
 
 ### 3.5 Labels (`Labels.sanitize`, pure)
 1. Strip `§x` pairs and any lone `§`.
@@ -279,10 +279,10 @@ The number of tombstones is capped at `maxSensors`; beyond that the oldest tombs
 | UNLOADED | heartbeat at the same position | LIVE |
 | any (UUID A indexed at position P) | heartbeat of UUID B at P | A becomes REMOVED(`REPLACED`) |
 | LIVE | `onCoverUnload`, `getWorld(dim)==null`, or `!blockExists` | UNLOADED. The open minute closes with gap `chunk_unloaded` or `dimension_unloaded`. |
-| LIVE | chunk loaded but the tile is missing, dead, not GT, or the cover at `side` has another UUID | `strikes++`; a `target_missing` second is recorded; at 3 the entry becomes MISSING |
+| LIVE | chunk loaded but the tile is missing, dead, not GT, or the cover at `side` has another UUID | `strikes++`; a `target_missing` second is recorded; at 3 the entry becomes MISSING. **The partial minute is closed with gap `target_missing` and queued first** (GS-107-02), exactly as the removal row does: it is an exit from LIVE, and a machine's last minute is the interesting one. |
 | LIVE or UNLOADED | `onRemoved(DETACHED)` or `onRemoved(IN_ITEM)` | REMOVED or IN_ITEM. The partial minute gets gap `sensor_removed`, its slot is queued, RAM rings are freed. |
 | tombstone | `now − stateSince > history.removedRetentionHours` (24) | expired: entry deleted, file deleted on the I/O thread |
-| UNLOADED | `now − lastSeen > history.staleExpiryDays` (30) | expired. If the cover loads later, the heartbeat registers it fresh from cover NBT. |
+| UNLOADED | `now − lastSeen > history.staleExpiryDays` (30) | expired. If the cover loads later, the heartbeat registers it fresh from cover NBT. **`lastSeen` is stamped on the unload itself** (GS-107-03): the heartbeat fast path deliberately reads no clock, and with `sampling.enabled=false` nothing else would ever refresh it, so the window would be measured from registration. |
 | any | `/gregscope purge` | expired immediately. A LIVE sensor that heartbeats again registers again with the same UUID and empty history. |
 
 **Housekeeping** runs at server start and then every 72,000 ticks. It is O(entries) and never touches the world.
@@ -541,7 +541,7 @@ Header, 64 B:
   entries:[{ idM, idL, kind:b, dim, x, y, z, side:b, owM?, owL?, owN, lbl, mi:i, mn, nm, st:s(lastStatusId),
              state:b (0 UNLOADED,1 MISSING,2 IN_ITEM,3 REMOVED), cause:b, ct, seen, since:l }] }
 ```
-- **Saving:** when dirty, on dim-0 `WorldEvent.Save` and on `FMLServerStoppingEvent`. The server thread serializes to `byte[]`. The I/O thread writes `.tmp`, copies the old file to `.bak`, then does `Files.move(ATOMIC_MOVE)`, falling back to `REPLACE_EXISTING` on `AtomicMoveNotSupportedException`.
+- **Saving:** when dirty, on dim-0 `WorldEvent.Save` and on `FMLServerStoppingEvent`. **`seen` does not mark the registry dirty** (GS-107-04): a sample advances it every second, so marking dirty there would pin the flag true for ever and make it useless. GS-109's shutdown save therefore runs **regardless of `dirty`**, and a steady-state server persists `seen` at the latest on stop; a `seen` that is a few minutes stale after an unclean stop is accepted. The server thread serializes to `byte[]`. The I/O thread writes `.tmp`, copies the old file to `.bak`, then does `Files.move(ATOMIC_MOVE)`, falling back to `REPLACE_EXISTING` on `AtomicMoveNotSupportedException`.
 - **Loading:** `registry.dat`, else `.bak`, else an empty registry with one WARN. The registry rebuilds itself from heartbeats, since identity lives in the covers.
   - `v > 1`: rename to `.unsupported-v<N>` and start empty.
   - LIVE is never persisted; every loaded non-tombstone entry starts as UNLOADED.
@@ -856,7 +856,7 @@ Sizes: S ≤0.5 d, M 1-2 d, L ≈3 d. Every ticket ends with `./gradlew build` g
 - **Scope:** `SensorRegistryCore` (§4), the `SensorRegistry` adapter wired to the cover hooks, caps, OVER_CAP LRU, tombstones, housekeeping, reverse index.
 - **AC:**
   - Every row of §4.3 is implemented.
-  - The heartbeat fast path does no allocation and only one map lookup (code review plus a unit test using a counting map).
+  - The heartbeat fast path does no allocation and only one map lookup **end to end, adapter included** (code review plus a unit test using a counting map; the counting-map test measures `SensorRegistryCore` only, so `SensorRegistry` must not look the entry up a second time - GS-107-05).
   - Caps are never exceeded; tombstones are excluded from caps and capped themselves.
 - **Tests:**
   - U `SensorRegistryCoreTest`: one test per transition row; 3-strike MISSING; move from IN_ITEM/MISSING/REMOVED; duplicate with LIVE/UNLOADED re-keys the newcomer; position replaced; global and team cap with a merge scenario; OVER_CAP retry interval; expiry at 24 h / 30 d; tombstone eviction order; rebuild from an empty registry.
@@ -1002,6 +1002,11 @@ Sizes: S ≤0.5 d, M 1-2 d, L ≈3 d. Every ticket ends with `./gradlew build` g
   - After 2 h of play, stats show p99 ≤1 ms/tick and `ioDroppedTotal=0`.
   - A real restart keeps labels and 24 h of history, with a gap.
   - Mod removal on a copy of the world: it loads after the FML prompt, machines are intact, sensors are gone.
+  - Review follow-ups: the WAILA tooltip of a healthy sensor reads "GregScope sensor", never the inert
+    wording (GS-REV-1); a real player attaching a cover gets the player as owner and, over the cap, the chat
+    line; and the accepted GS-REV-4 side effect is confirmed once - an outdoor machine whose exposed face
+    carries a sensor no longer catches fire or explodes in a thunderstorm, exactly as it would with any other
+    GT cover on that face.
 - **AC:** every item recorded with date and pack version in `docs/testing.md`.
 
 **Suggested order:**
@@ -1352,3 +1357,438 @@ Sizes: S ≤0.5 d, M 1-2 d, L ≈3 d. Every ticket ends with `./gradlew build` g
 - **Fixture generator committed (FIX-1).** `tools/gen_fixtures.py` (Python 3, standard library) regenerates
   `src/test/resources/fixtures/v1/`; the regenerated files differ from the previous ones only in their header comments,
   which now name the script. GS-109's `.gsh`/registry fixtures should be added to it, not produced by the Java encoder.
+
+### GS-105 (2026-09-17)
+- **Classes.** `sensor/ItemMachineSensor` (`gregscope:machine_sensor`, unlocalized `gregscope.machine_sensor`, icon
+  `gregscope:machine_sensor` via `setTextureName`, stack 64, tab `gregscope`), `sensor/SensorCovers` (item registration in
+  preInit, cover registration in init exactly as §3.2, the placement predicate, `sensorStack()`) and a first
+  `sensor/MachineSensorCover`; all three are listed as intended adapters in `PureSourcesTest.IMPURE`. Added and not
+  named in §2: the `[pure]` `GregScopeAssets` (registry, icon and lang key names; `AssetsExistTest` finds its
+  `BLOCK_ICON_*`, `ITEM_ICON_*` and `LANG_*` constants by naming convention, so later tickets add a constant and get the
+  check for free) and the design-v0.3 GS-201 hooks below. The creative tab icon is now the sensor item.
+- **`isSupportedMte` is `public static`, not package-visible.** §2 says "package-visible static", but its caller
+  `SensorCovers` lives in `sensor/`, not `probe/`. The method body is the v0.1 `isSupported` unchanged
+  (`MTEBasicMachine || MTEMultiBlockBase`; `null` is false), and `supports`/`snapshot` call it.
+- **The cover is read-only from the commit that makes it placeable.** GS-105 is the first ticket after which a player
+  can attach the cover, and GT's `Cover` defaults (`lets*` false, copy-paste allowed, tick-rate addition allowed) would
+  block energy, items, fluids and redstone on that face. So the §3.4 flag overrides land here: every `lets*` true,
+  `isRedstoneSensitive`/`manipulatesSidedRedstoneOutput` false, `allowsCopyPasteTool`/`allowsTickRateAddition`/
+  `hasCoverGUI` false. `SensorPlacementTests` asserts the flags; the behavioural transparency tests stay in GS-106.
+  Everything else in §3.4 is GS-106: cover NBT (`identity()` is `null`, i.e. inert), `onPlayerAttach`,
+  `getMinimumTickRate()=20` and the heartbeat, removal/unload hooks, `getDescription`. Until then the minimum tick rate is
+  GT's default 0, so GT never calls `doCoverThings` on it (`CoverableTileEntity.java:184-193`).
+- **design-v0.3 GS-201 hooks that GS-105 touches.** A2: `[pure]` `sensor/SensorCover { SensorIdentity identity(); int
+  sensorKind(); }`, implemented by `MachineSensorCover` with kind 0; `[pure]` `sensor/SensorKind` pins the codes 0/1/2
+  and the "kind label" (`machine`, `item_flow`, `fluid_flow`, else `unknown`) for §10.1 `kind=` and the exporter, and
+  `isSupported` (v0.2: machine only), for GS-107/108/109 to use. A4: the one-per-machine check is
+  `instanceof MachineSensorCover`, never `SensorCover`; `SensorPlacementTests.machineSensorAllowedBesideOtherCovers` (the
+  GS-201 Horizon-QA test) proves a GT conveyor and a kind-2 `SensorCover` stub do not block a Machine Sensor, and a
+  negative control with `instanceof SensorCover` failed it. A1 (reverse index keyed by position and side), A3
+  (`RegistryNbtCodec` keeping unknown kinds) and A5 (`SlotLayout`) are not touched by GS-105; they belong to
+  GS-107, GS-109 and the history refactor.
+- **`placeCover` checks nothing (test finding).** `CoverPlacer.placeCover` only builds and attaches the cover
+  (`gt5u/gregtech/api/covers/CoverPlacer.java` placeCover); the predicate and the machine's face rule are applied by the
+  caller, e.g. `BaseMetaTileEntity.onRightclick` (`BaseMetaTileEntity.java:1565-1572`: no cover on the face,
+  `isCover`, `isCoverPlaceable`, `allowCoverOnSide`). A test that only called `placeCover` as §13.1 literally says would
+  place a sensor anywhere, so the §13.1 helper applies that same gate before `placeCover`. The Matter Manipulator is not
+  in the pinned sources, so whether it applies the same gate was not verified; the design's "the Matter Manipulator
+  path" is kept as the name of the helper, not as a claim about that mod.
+- **GT ignores clicks on a tile that has never ticked.** `BlockMachines.onBlockActivated` returns false while
+  `getTimer() < 1` (`gt5u/gregtech/common/blocks/BlockMachines.java:423-425`). A freshly placed or template machine in a
+  Horizon-QA cell has not ticked, so a FakePlayer right-click is silently ignored and every "rejected" assertion would
+  pass vacuously (observed: the first run failed `placesOnLvMachine` with "GT did not handle the sneak right-click").
+  The player-path helper now warps the cell 2 ticks first and every click asserts that GT handled it.
+- **Client-only members on the server.** `Item.getCreativeTab()` and `Item.addInformation` are `@SideOnly(CLIENT)` in
+  1.7.10, so the server-side test does not call `getCreativeTab()`; `ItemMachineSensor.addInformation` overrides the
+  client method without the annotation (allowed by `ShippedClassesTest`), which keeps it callable on a dedicated server,
+  where the test checks the three tooltip lines. §12.2's claim that dedicated servers load mod lang holds: the English
+  item name, tooltips and `gregscope.state.running` resolve in the Horizon-QA server.
+- **Textures without PIL.** §12.2 names PIL; `tools/gen_textures.py` uses only the standard library (`struct`, `zlib`),
+  like `tools/gen_fixtures.py`, so no extra install is needed. It writes only the GS-105 textures
+  (`items/machine_sensor.png`, `blocks/iconsets/GREGSCOPE_SENSOR_OVERLAY.png`, both 16x16 RGBA); GS-112 adds the Hub
+  textures to the same script. Two runs gave byte-identical files.
+- **Lang.** GS-105 fills the item name, `gregscope.tooltip.sensor.1..3` (the §12.2 texts), `gregscope.state.<id>` x10
+  and `gregscope.gap.<id>` x8 (derived from `MachineState`/`GapReason` ids in `AssetsExistTest`). The tile name and
+  `gregscope.hub.*`, `gregscope.cmd.*` and `gregscope.chat.*` keys come with their tickets.
+- **`ShippedClassesTest` lifted on purpose (§1.4 "no items").** `GameRegistry` stays a forbidden reference except in
+  `sensor/SensorCovers`, which must reference it and may use only `registerItem` (plus GT's `registerCover`) among
+  `register*` names; `registerWorldGenerator`, `registerTileEntity`, `registerTileEntityWithAlternatives` and
+  `registerBlock` are now forbidden member names everywhere (GS-112 lifts tile entity and block registration).
+  `IdleCostTests` still passes with the item registered.
+- **Doc fix.** `docs/testing.md` said a suite where every batch times out takes 2100 ticks; recounted from the sources
+  (longest `timeoutTicks` per batch, 17 batches with the new `gregscope.sensor`) it is 2800 ticks (140 s), still inside
+  the 300 s CI step.
+
+### GS-106 (2026-09-17)
+- **Classes.** `sensor/MachineSensorCover` gains everything §3.4 lists except the registry call itself: cover NBT over
+  `SensorNbtCodec`, `onPlayerAttach`, `getMinimumTickRate() = 20`, the heartbeat, the unload/removal hooks and
+  `getDescription`. Added and not named in §2: the adapter `sensor/NbtKeyValue` (the `NBTTagCompound` side of the
+  GS-103 `KeyValue` seam), the adapter `sensor/SensorEvents` (below) and the `[pure]` `sensor/SensorDescription` (the
+  description text, so it is unit-testable). `SensorIdentity.forAttach` holds the §3.4 owner chain, also for the unit
+  tests. `PureSourcesTest` lists the two new adapters on purpose; `ShippedClassesTest` only gained three
+  expected-class entries and no check changed.
+- **A seam instead of a direct registry call (§3.4).** §3.4 says `doCoverThings` calls
+  `SensorRegistry.heartbeat(this, holder)`, and §4.3 names `onUnloaded`/`onRemoved`. `SensorRegistry` is GS-107, so
+  GS-106 raises the same four events through `SensorEvents` (`heartbeat`, `unloaded`, `detached`,
+  `destroyedIntoItem`), which `SensorCovers.events()` holds and GS-107's registry installs with
+  `SensorCovers.setEvents`; `SensorEvents.NONE` is installed until then, and `GregScope.serverStopped` clears it, so a
+  single-player world switch cannot keep a stale registry. The two removal methods are named after §4.3's causes
+  (DETACHED, IN_ITEM) rather than taking a `RemovalCause`, because that enum belongs to GS-107's `registry` package.
+  Every event passes the cover as the §5.1 A2 `SensorCover`, plus the holder and the cover side separately, which is
+  what design-v0.3 §5.1 A1 needs to key its reverse index on `(position, side)` and what A2 needs to accept a v0.3
+  meter cover raising the same events. `GregScopeTestHooks.setSensorEvents` (gated like every hook) lets
+  `SensorCoverTests` watch the events before the registry exists.
+- **Clock.** §6.2 wants every timestamp to come from `Clock`, so `ct` does too: `GregScope.clock()` (system clock by
+  default, reset in `serverStopped`) with the §13.1 `setClock` hook, which GS-108 will reuse. `SensorCoverTests` pins
+  `ct` with a `FakeClock`.
+- **A picked-up sensor keeps its identity, so `onPlayerAttach` never overwrites data.** GT builds the cover, attaches
+  it and *then* calls `onPlayerAttach` (`gt5u/gregtech/api/covers/CoverPlacer.java` placeCover), and a cover restored
+  from a machine's item NBT is built by `CoverRegistry.buildCoverFromNbt` instead. `onPlayerAttach` therefore returns
+  early when the cover already has an identity or unsupported data, so no code path can mint a second UUID over an
+  existing one.
+- **Unknown keys in `d` are preserved, not just an unsupported version.** §3.3 only requires writing a `gs > 1`
+  compound back unchanged. The cover keeps the whole compound it read and writes the identity into a copy of it, so a
+  third party's (or design-v0.3's `io`) key in `d` survives a save even for a valid v0.2 sensor. A non-compound `d`
+  (for example a bare int left by another mod that reused the numeric item ID) is kept verbatim and the cover is inert.
+- **Owner names are capped, GT's are not.** `IGregTechTileEntity.getOwnerName()` returns the placing player's display
+  name unchanged, while §3.3 caps `owN` at 16 UTF-16 units. The dev FakePlayer name `gregscope-gametest` is 18
+  characters, so the cached name is the first 16; the gametest compares against the capped value. `getOwnerName()` also
+  returns the literal `"Player"` for an unset name (`BaseMetaTileEntity.java:1805-1809`), so an owned sensor can carry
+  that as its cached name; the owner UUID is what identity and access use.
+- **Transparency is proven by real transfers, not by the flags (§14).** GT consults a cover through
+  `isEnergyInputSide`, `canInsertItem`/`getAccessibleSlotsFromSide`, `fill`/`canFill` and
+  `getInternalInputRedstoneSignal`, and GT's own defaults for an *uncovered* face come from `CoverNone`, which returns
+  true for every `lets*`. So each transparency test first shows the resource moves with no cover, then attaches the
+  sensor and moves it again: a transformer charging the machine through the covered face, a vanilla hopper inserting
+  cobblestone through it, 1,000 L of water filled through it, and a redstone block read back through it. Two GT
+  details shaped the setup: a basic machine refuses items and fluids on its main facing and its front facing whatever
+  the cover says (`MTEBasicMachine.allowPutStack`, `isLiquidInput`), so the tests set both facings before attaching the
+  cover (a facing change drops covers, `CoverableTileEntity.checkDropCover`); and GT only refreshes its EU I/O faces
+  after the holder's 20th tick (`BaseMetaTileEntity.java:425-447`), so the energy test warps 25 ticks before asserting
+  `inputEnergyFrom`. The §13.2 negative control (four `lets*` set to false) failed exactly the four transparency
+  tests, each on its own resource; see `docs/testing.md`.
+- **A transformer, not a cable, feeds the energy test.** Horizon-QA's `supplyEU` calls
+  `increaseStoredEnergyUnits` directly on the tile at that position, which bypasses cover checks, so it cannot test
+  transparency by itself. It fills an MV-to-LV transformer instead, and GT's own `handleEUOutput` ->
+  `IEnergyConnected.Util.emitEnergyToNetwork` -> `injectEnergyUnits` carries the EU into the machine through the
+  covered face. The transformer emits at `oldOutput` (32 EU/t, the machine's input voltage) even though it debits
+  itself the output loss, so the LV machine does not explode (`BaseMetaTileEntity.java:452-468`).
+- **A basic machine's input fluid is not `getFluid()`.** `MTEBasicTank.getFluid()` returns the *drainable* stack; a
+  fill through a face lands in the fillable stack (`getFillableStack()`). The first run of `transparentToFluids`
+  failed on that: `fill` returned 1,000 and `getFluid()` was still null.
+- **E5 confirmed, and the hammer path is not vacuous.** With `allowsTickRateAddition()` false, a hard-hammer
+  right-click on the covered face leaves the rate at 20 and GT sends `gt.cover.info.chat.tick_rate_not_allowed`
+  (`BaseMetaTileEntity.java:1589-1605`). With the flag flipped to true in a negative control, the same click raised the
+  rate to 40. The test uses a hard hammer rather than a jackhammer because `GTModHandler.damageOrDechargeItem` damages
+  a hammer for any player, while a jackhammer needs charge.
+- **The copy tool is exercised for real.** `ItemList.Tool_Cover_Copy_Paste` is an electric `MetaBaseItem`
+  (`MetaGeneratedItem01.java:5233`), so the test charges it and calls `Item.onItemUseFirst` with a sneaking FakePlayer
+  (copy mode): `BehaviourCoverTool` reads `allowsCopyPasteTool()`, stores nothing for the sensor, and does store the GT
+  conveyor placed on the next face in the same setup.
+- **An unknown cover id loads as `CoverNone`, which is still a "valid" cover object.** `CoverRegistry.buildCoverFromNbt`
+  falls back to `CoverNone` for an id it does not know, and that object reports `isValid() == true` when the id is
+  non-zero, so `hasCoverAtSide` stays true for it. §8.5's "the cover is dropped on the next save" is about the item id
+  no longer resolving; what the test pins is that GregScope's data is ignored, no sensor appears, and the face stays
+  transparent.
+- **Heartbeat cadence needs real ticks.** As errata E2 says, a warp does not advance `MinecraftServer.getTickCounter()`,
+  which `CoverableTileEntity.tickCoverAtSide` takes modulo the cover's tick rate; it also gates on the holder's
+  `mTickTimer > 10`. The heartbeat test therefore waits real ticks (the first heartbeat arrived after 30). It also
+  found that Horizon-QA keeps every finished cell force-loaded, so covers from earlier tests keep heartbeating into a
+  listener installed later: the listener's queries filter by sensor UUID and by holder, and the "inert cover never
+  reports" assertion is phrased as "no event without an identity, and nothing from that machine".
+- **Not wired yet.** Nothing consumes the events, and `setAvailability` has no caller, so `getDescription` shows no
+  availability word until GS-107. Registration, duplicate re-keying, label writes (§3.5) and the tombstone
+  transitions of §4.3 are GS-107 and GS-111.
+
+### GS-107 (2026-09-17)
+- **Classes.** New package `registry/`: the `[pure]` `SensorState` (with the §8.3 persisted codes pinned, never
+  `ordinal()`), `RemovalCause`, `PosKey`, `SensorEntry`, `RegistryEvents` and `SensorRegistryCore`, plus the MC adapter
+  `registry/SensorRegistry` (listed in `PureSourcesTest.IMPURE` on purpose). `ShippedClassesTest` only gained four
+  expected-class entries; no check changed. Not named in §2: `SensorEntry` (§4.1 needs a value to hold, and a separate
+  class is unit-testable), `PosKey` (the A1 key) and `RegistryEvents` (the seam below). `RunsTable` and
+  `RegistryNbtCodec`, the other two `registry/` classes of §2, stay with GS-109.
+- **A1's key does not fit in one long, so it is two fields.** design-v0.3 §5.1 A1 asks for
+  `packedPos(dim,x,y,z)<<3 | side`. x and z need 26 bits each for the +-30,000,000 world limit, y needs 8 and the side
+  3, which is already 63 bits, and a dimension ID is a full `int` (mod packs hand out negative and large IDs).
+  `PosKey` therefore holds the dimension and one long packing `(x, y, z, side)` exactly as A1 describes for the rest;
+  `packedPosition()` is `packed >>> 3`, so the numbers A1 names are all there. A unit test pins the packing at the
+  world limits. Keys are built on slow paths only.
+- **The fast path is one lookup and nothing else.** §14 asks for "no allocation and only one map lookup". The fast path
+  is `byId.get(uuid)`, four primitive comparisons plus the kind, and a store of `lastHeartbeatTick`; it never touches
+  the reverse index, the clock, the team resolver or `RegistryEvents`. The unit test injects counting maps, a counting
+  clock and a counting team resolver and asserts 1 / 0 / 0 / 0, which is stronger evidence than reading the code.
+  **GS-107-05 correction:** that test measures the core only, and the adapter used to add a second `core.entry(id)` on
+  every heartbeat to work out the availability word, so the shipped path did two lookups. The word now comes from
+  `Heartbeat.availability()`, which follows from the outcome alone (LIVE/REGISTERED/RESUMED/REKEYED → `live`,
+  OVER_CAP/REKEYED_OVER_CAP → `over cap`, UNSUPPORTED_KIND → none) and is itself unit-tested, so the adapter needs no
+  lookup at all.
+- **`RegistryEvents`, because buckets, history loads and file deletes are other tickets.** §4.3 wants a registration to
+  "assign a bucket, allocate rings, queue an async history load" and an expiry to delete the file on the I/O thread.
+  The core allocates the rings itself (they are its own §4.1 state) and hands the rest out through the `[pure]`
+  `RegistryEvents` (`sensorLive`, `sensorInactive`, `minuteClosed`, `sensorExpired`), which is `NONE` until GS-108 and
+  GS-109 install themselves. The state machine is therefore complete and testable now.
+- **A duplicate is re-keyed through the cover, not by the core.** The core mints the fresh UUID (from an injected
+  supplier, so tests are deterministic), registers the newcomer under it and returns `REKEYED`; the adapter writes it
+  into the cover with the new `SensorCover.rekey(SensorIdentity)` and calls `markDirty()`. `rekey` and
+  `setAvailability` were added to the §5.1 A2 `SensorCover` interface rather than to `MachineSensorCover` only, so a
+  v0.3 meter can be re-keyed and labelled through the same seam.
+- **The caps are checked on every transition into a counted state, not only for an unknown UUID.** §4.3 only spells the
+  cap out for the "unknown" row, but a tombstone that resumes is not counted while it is a tombstone, so admitting it
+  unchecked would let the registry exceed `maxSensors`. UNLOADED to LIVE needs no check (it already counts).
+- **Settings and the clock are read live.** The registry is built once in `serverStarting`, but it reads
+  `GregScope.settings()` through a `Supplier<Settings>` and the clock through `GregScope.clock()`, so a test hook
+  installed after server start (which is when Horizon-QA installs one) reaches it. A `Settings` snapshot taken at
+  construction would have made `overrideSettings` useless for the cap test.
+- **`TeamResolver.clearCache()`.** §5 says a resolver caches "for one Hub view rebuild or one sampler-frame sequence".
+  The registry keeps one for the whole run, so a `default void clearCache() {}` was added to the interface and the core
+  clears the cache before every cap question; otherwise a team merge or kick would never be seen. `GtnhlibTeamResolver`
+  already had the method and now overrides it.
+- **Validation lives in the adapter until GS-108.** §14 gives GS-107 the in-game test
+  `destroyBlockBecomesMissingAfterThreeSamples`, which needs the §6.2 target resolution, but §6.2's `TargetResolver` is
+  GS-108's. `SensorRegistry.validate(UUID)` implements exactly the part before the probe call (dimension,
+  `blockExists`, the tile, then the cover's interface, kind and id, per A2) and applies the §4.3 result. The §13.1 hook
+  `sampleNow(uuid)` calls it; GS-108 extends the same hook with the probe and the ring append, so no test changes.
+- **Hooks added beyond §13.1's list:** `heartbeatNow(cover)` and `sampleNow(uuid)` are named there;
+  `housekeepingNow()` and `purgeAllNow()` are new. Housekeeping otherwise only runs at server start (the 72,000-tick
+  timer needs GS-108's single `ServerTickEvent` handler, which §1.4 reserves for that ticket), and `purgeAllNow` is
+  `/gregscope purge` applied to everything, which the cap test needs because Horizon-QA keeps finished cells loaded and
+  their sensors registered.
+- **`model/` is now a checked pure package.** A §4.1 entry holds the last `MachineSnapshot`, so `PureSourcesTest`'s
+  bytecode layer needed that class to be `[pure]`. `MachineSnapshot`, `MachineKind`, `SnapshotKeys` and `StatusIds`
+  import nothing but `java.util` and have since v0.1; they are now marked and the `model` package is scanned.
+- **Test findings, not design changes.**
+  - `helper.destroyBlock` is `world.setBlock(..., air, 0, 3)`, which runs GT's `breakBlock` but not `getDrops`
+    (`gt5u/gregtech/common/blocks/BlockMachines.java:463-498`, `BaseMetaTileEntity.java:1385-1406`), so no cover hook
+    fires. That is exactly the §4.3 MISSING case: only a validation notices.
+  - A facing change does not drop a Machine Sensor from a **basic** machine. `MTEBasicMachine.allowCoverOnSide` only
+    refuses the main facing for a placer that is not GUI-clickable, and GregScope's is GUI-clickable
+    (`MTEBasicMachine.java:981-985`), so `checkDropCover` keeps it. `facingChangeDropRemoves` therefore uses an EBF
+    controller, where `allowCoverOnSide` is `side != frontFacing` (`MTEMultiBlockBase.java:296-298`), and GT drops the
+    cover in the tick after `setFrontFacing` (`BaseMetaTileEntity.handleFacingChange`).
+  - An OVER_CAP sensor gets **no entry at all**, so §4.2's "OVER_CAP is transient and not persisted" is literal: the
+    refusal lives only in the 1,024-entry access-ordered LRU that implements the 1,200-tick retry window, and a
+    purge-all clears it.
+  - The OVER_CAP chat message of §4.3 needs the attaching player, which the registry only learns about one heartbeat
+    later. `MachineSensorCover` keeps it in a `WeakReference` that the first heartbeat consumes, so nothing holds a
+    player alive; the lang key is the new `gregscope.chat.sensor.over_cap`.
+  - The A1 kind rules (a kind mismatch is a duplicate; a cover of another kind on another face of the same block is not
+    a replacement) cannot happen in a v0.2 build, which registers kind 0 only. The core therefore takes the set of
+    registered kinds as an `IntPredicate` (`SensorKind::isSupported` in production), and the unit tests exercise both
+    rules against a kind-1-aware core. A v0.2 heartbeat of kind 1 or 2 returns `UNSUPPORTED_KIND` and creates nothing.
+- **Not wired yet.** Nothing samples yet, so `lastSnapshot`, `metaId`/`metaName`/`machineName`/`lastStatusId`, the
+  buckets and `historyLoaded` stay at their defaults until GS-108; nothing persists, so every server start rebuilds the
+  registry from heartbeats (the §8.3 loader and `RunsTable` are GS-109), and `minuteClosed`/`sensorExpired` have no
+  listener. The 72,000-tick housekeeping timer arrives with GS-108's tick handler; GS-107 runs housekeeping once at
+  server start, as §4.3 says.
+
+### GS-108 (2026-09-17)
+- **Classes.** New in `sampling/`: the `[pure]` `SamplerSchedule` (buckets, carry-over and the budget loop),
+  `SampleFolder` (one sample or one gap second folded into a sensor's rings, minute and counters), `SamplerStats`,
+  `SamplerStatsView`, `LimitsView`, `CountersView`, `MachineCountersView`, `SensorView` and `TelemetryFrame`, plus the
+  two MC adapters `TargetResolver` (the §6.2 world chain, the only telemetry class touching `World`) and
+  `TelemetrySampler` (the one tick handler), both listed in `PureSourcesTest.IMPURE` on purpose. Not named in §2:
+  `SampleFolder`, `SamplerStatsView`, `LimitsView`, `CountersView` and `MachineCountersView`; §7.7 does name a
+  `SamplerStatsView` and a `LimitsView` in the frame, and `SampleFolder` is the pure half of §6.2 split out so the
+  arithmetic of a sample is unit-testable without Minecraft.
+- **Exactly one `ServerTickEvent` handler, and the guards that prove it.** `TelemetrySampler.onServerTick` is the only
+  `@SubscribeEvent` method in the mod. It is registered on the FML bus (where 1.7.10 posts `ServerTickEvent`) inside
+  `serverStarting`, so the listener belongs to the GregScope mod container, and unregistered in `serverStopped`.
+  - `ShippedClassesTest.noPeriodicWorkHooks` lifts four references (`SubscribeEvent`, `EventBus`, `TickEvent`,
+    `FMLCommonHandler`) for `sampling/TelemetrySampler` **only**; threads, timers, executors, world generators and
+    tile-entity registration stay forbidden for it too. The new `theOnlyTickHandlerIsTheSampler` requires the sampler
+    to really use all four (so the skip cannot pass vacuously), to name `TickEvent$ServerTickEvent` and
+    `TickEvent$Phase`, and to use none of the other forbidden references.
+  - `IdleCostTests` changed deliberately: `assertNoGregScopeListeners` became `assertGregScopeListeners(.., expected)`,
+    which counts GregScope listeners two ways (the listener object's class and the owning `ModContainer`) and requires
+    0 on all three Forge buses and exactly 1 on the FML bus, and that the one is `GregScope.sampler()`. The new
+    `exactlyOneServerTickHandler` reflects over the live listener: exactly one `@SubscribeEvent` method, taking a
+    `ServerTickEvent`, and phase START really does nothing while END runs one tick. The new
+    `handlerDoesNoWorkWithoutLiveSensors` empties the registry and runs a whole interval inside one server tick (so no
+    cover can heartbeat in between) and asserts `cyclesTotal` and `samplesTotal` do not move while `ticksTotal` does.
+- **"No work" is the per-sensor work.** `SamplerSchedule.tick` returns before it reads `nanoTime` when the carry-over
+  list and the due bucket are both empty, so an idle tick costs two emptiness checks and two counter increments; the
+  unit test asserts the fake clock was not read at all. The once-per-interval block still runs: with no sensors that
+  is one empty `TelemetryFrame` per second, which is the documented §6.3 cost of publishing.
+- **Registry event ordering changed (minimal glue).** `SensorRegistryCore.unloaded` and `toTombstone` now fire
+  `events.sensorInactive(entry)` **before** they clear the bucket and free the rings, so the schedule can do the §6.1
+  O(1) swap-remove from `entry.bucket()`/`entry.bucketSlot()`. The entry still ends with `bucket == -1`, which is what
+  `SensorRegistryCoreTest` and `SensorLifecycleTests` assert. `SensorRegistryCore.storeClosedMinute` was added so the
+  sampler's closed minutes reach the ring and `RegistryEvents.minuteClosed` through the same path as the core's own.
+- **`SensorEntry` gained five RAM-only fields:** `bucketSlot` (the O(1) swap-remove), `sampleDueTick` (the interval a
+  carried sensor was due in), `lastGapReason` (§7.7's `SensorView.lastGapReason`), `lastSampleTick` (the `serverTicks`
+  delta) and `lastProbeWarnEpochSec` (the §6.2 "one WARN per sensor per 10 minutes").
+- **`serverTicks` is a delta added before the sample folds.** §7.4 wants the server ticks seen while a minute was open.
+  Counting per tick per sensor would be O(N) work every tick, so the sampler adds `ownTick - entry.lastSampleTick`
+  once per sample, before `MinuteAccumulator.sample` can roll the minute over. Those ticks therefore land in the
+  minute that was open while they elapsed, which is what the field means; the unit test pins it.
+- **`sampling.enabled=false` skips, it does not carry.** §7.2 gives gap bit 3 to both a budget skip and
+  `sampling.enabled=false`. The schedule treats the disabled case as an immediate skip of everything due, so the gap is
+  recorded in the interval it belongs to instead of a full interval later. It is the same `Sink.skip` path the budget
+  uses, which is what makes the in-game `samplingDisabledRecordsSkippedGaps` evidence for the budget skip too.
+- **Bug found by the in-game test, fixed, and pinned by a unit test.** In the first version, when the carry-over list
+  alone spent the budget, the tick's own bucket was not visited at all: its sensors were neither sampled, carried nor
+  skipped, so a whole interval vanished without a gap and they never aged out. `SamplerTests.tinyBudgetSkips` showed it
+  as `budgetExceededTicks=120, skipped=0, carriedOver=2` where a backlog was expected.
+  `SamplerScheduleTest.theDueBucketCarriesOverWhenTheCarryListSpendsTheBudget` is the regression test.
+- **A second hazard of the same kind, found in review and pinned too.** Serving a sensor can take it out of the
+  schedule inside the loop that is iterating its bucket: a sample whose chunk turns out to be gone makes the entry
+  UNLOADED, and the registry reports that back as `sensorInactive` -> `SamplerSchedule.remove`, whose O(1) swap-remove
+  moves the last element into the freed slot. An indexed loop would then skip that element for the whole interval,
+  with no gap recorded. Both loops now re-read the list position after serving and only advance when the element is
+  still there; only the sensor being served can be removed this way, because the registry touches exactly the id it
+  was asked about. `SamplerScheduleTest.aSensorRemovedWhileItIsBeingSampledCostsNoOtherSensorItsTurn` pins it.
+- **Design-v0.3 GS-201 hooks this ticket touches.**
+  - **A2.** `TargetResolver` is the §6.2 chain and checks, in order, the `SensorCover` interface, `sensorKind()` and
+    the id; anything else at that side is a `target_missing` strike. `SensorRegistry.validate(UUID)` now delegates to
+    it and `validateAndResolve(UUID)` returns the tile entity so the sampler does not resolve twice, so GS-107's
+    `SensorLifecycleTests` did not change, as its notes required.
+  - **A6.** `SensorView.lastSnapshot()` is nullable and documented as kind-0 only, `SensorView.kind()` is published,
+    and `CountersView` is an interface (`kind`, `samplesTotal`, `gapSecondsTotal`) with `MachineCountersView` as the
+    kind-0 implementation, so a v0.3 `FlowCountersView` needs no reader change. The nullable `lastFlow` field of A6 is
+    **not** added: its type `FlowReading` is GS-203's and a field of a type that does not exist would be dead weight;
+    `SensorView` is a plain immutable value, so adding it later touches one constructor and one getter.
+- **What the frame reports and where the numbers come from.** `duplicatesRekeyedTotal` and `quotaRefusedTotal` are
+  copied from the registry core, which owns them; `clockSkewRefusedTotal` is summed over the entries' accumulators when
+  a frame is built, because each accumulator counts its own refusals (§6.2); `lastFrameBuildNanos` necessarily
+  describes the **previous** frame, because the stats view has to be copied before the build it would time can finish.
+  The microsecond histogram is per working tick over a 60-second window (§6.3), rolled every 1,200 ticks.
+- **Read live, read once.** `sampling.tickBudgetMicros` and `sampling.enabled` are read from `Settings` on every tick,
+  so a test-hook override applies at once. `sampling.intervalTicks` fixes the number of buckets and is read once, at
+  construction, which is what §12.3 ("a change needs a restart") says.
+- **Hooks.** `sampleNow(uuid)` is now the whole §6.2 procedure (resolution, probe, fold) and still returns "did the
+  target resolve", so GS-107's tests are unchanged. `runIntervalNow()` (named in §13.1) runs one interval's worth of
+  ticks; `runTickNow()` runs one. The 72,000-tick housekeeping timer moved from "server start only" into the tick
+  handler, as GS-107's notes said it would.
+- **Measured cost, and why it differs from the GS-102 gate.** `SamplerTests.tinyBudgetSkips` logs both numbers on the
+  same 64 machines (LV Electric Furnaces, local Windows run, 2026-09-17):
+  - **warmed up:** 1,280 `sampleNow` calls after 1,280 warm-up calls, **mean 6.1-7.6 µs** per sample. That is the whole
+    §6.2 procedure (resolve + probe + fold), against the 1.4 µs p50 GS-102 measured for `PROBE.snapshot` alone in a
+    10,000-call hot loop.
+  - **cold:** during the first 120 real ticks of sampling, mean 81-156 µs per sample and a per-tick p50 of 135-175 µs.
+    The sample path had run only a few hundred times by then, and HotSpot compiles on invocation counts, so it was
+    still interpreted. This is real: a server that has just started pays it, and the §6.3 budget is what keeps it from
+    hurting the tick. At the 1,000 µs default and 6.4 µs warm, one tick serves ~156 samples, far above the 12.8 per
+    tick that 256 sensors need, so the GS-102 decision to keep the defaults stands.
+- **`tinyBudgetSkips` is the §14 test, with two changes forced by reality.** It needs the `gregscope:empty_5x3x5`
+  template, because the default Horizon-QA cell is 5x1x5 and 64 machines do not fit (the first run failed the isolation
+  check). It also breaks its 64 machines again at the end: Horizon-QA keeps finished cells loaded, every sensor placed
+  by a FakePlayer is unowned, and §4.2 counts all unowned sensors against one pseudo-owner, so 64 of them fill
+  `limits.maxSensorsPerTeam` (default 64) and every later batch's sensor is refused with OVER_CAP. That is exactly what
+  the first run showed: five `SensorLifecycleTests` failed with "no registry entry". The observed behaviour with
+  `tickBudgetMicros=100` and 64 sensors is the design's: the budget is exceeded on every tick and 111-209 intervals are
+  given up on with `sampling_skipped` over six intervals (six full runs).
+- **The §13.2 negative control (run once, reverted; the file was restored from a backup copy and `cmp` is identical).**
+  Removing the `blockExists` guard from `TargetResolver.resolve` makes
+  `SamplerTests.unloadedChunkNotLoadedBySampler` fail, as §13.2 requires: the sensor becomes MISSING after three
+  strikes instead of UNLOADED with a `chunk_unloaded` gap. The far chunk was still absent from the loaded-chunk map
+  right afterwards, so what this run demonstrates is the misclassification rather than a chunk load; the guard remains
+  the documented reason GregScope never asks for a chunk it has not been told is there.
+- **`statsCommandRuns` is deferred to GS-111.** §14 lists it under GS-108's Horizon-QA tests, but `/gregscope stats`
+  is GS-111's scope and no command exists yet. Everything it would show (`SamplerStats`, the histogram, the registry
+  totals, the frame) is published in the `TelemetryFrame` and asserted by `TelemetryFrameTest` and
+  `SamplerTests.everyIntervalPublishesAnImmutableFrame`.
+- **New Horizon-QA batches:** `gregscope.sampler` (the four hook-driven tests, 60 ticks), `gregscope.sampler.real`
+  (real ticks, 100), `gregscope.sampler.budget` (overrides settings and fills the registry, 200) and
+  `gregscope.sampler.disabled` (turns sampling off process-wide, 60). Four batches rather than one, because tests in a
+  batch run in parallel and share one sampler: the first run had `realTicksSampleOncePerSecond` see 7 samples in 60
+  ticks because its batch mates were calling `runIntervalNow`. The worst-case suite time is now 4,220 ticks (211 s)
+  over 26 batches against the 300 s CI step (the figure first written here, 4,120, was wrong: recounted from the
+  annotations, the longest `timeoutTicks` per batch sum to 4,220 - GS108-T2).
+- **Not wired yet.** `RegistryEvents.minuteClosed` and `sensorExpired` are still no-ops in the sampler: the 64-byte
+  writes and the file deletes are GS-109's, and so are `ioQueuedTotal`, `ioDroppedTotal` and `ioErrorsTotal`, which
+  stay 0. Nothing reads the frame yet either; the Hub (GS-113/GS-114), OpenComputers (GS-115/GS-116) and the commands
+  (GS-111) are its consumers.
+
+### Implementation notes / review follow-ups (GS-105 to GS-108)
+
+Findings from the adversarial review of GS-105 to GS-108, applied after GS-108. Each one is listed with what changed
+and what proves it. The v0.2 behaviour rules are unchanged: still server-authoritative, still read-only towards
+machines, still no mixins, ATs or reflection in `src/main`.
+
+- **GS-REV-1: `getDescription()` never reached a player, and lied when it did.** GT's only consumer is
+  `CoverableTileEntity.getWailaBody` (`CoverableTileEntity.java:531-553`), the **client** WAILA tooltip path, and the
+  cover syncs no data (`isDataNeededOnClient()` false, `writeDataToByteBuf` not overridden, so
+  `GTPacketSendCoverData` carries only the tick rate). A client `MachineSensorCover` therefore has `identity == null`
+  and rendered every healthy sensor as "GregScope sensor (inactive)" - the wording reserved for a foreign or corrupt
+  blob. The cover now returns the neutral `SensorDescription.NEUTRAL` ("GregScope sensor") whenever `getTile()` is
+  null or not server side, and the full status line only on the server. `toString()` still prints the identity, so
+  debugging is unaffected. The real client label is the §1.2 v0.2.1 item; §3.4's `getDescription` row now says so.
+  Evidence: `SensorDescriptionTest.theNeutralWordingClaimsNoState`; the server-side gametests (`SensorCoverTests`,
+  `SensorLifecycleTests`) still assert the full line and still pass. **Not covered by an automated test:** what a
+  client actually renders - that stays on the GS-121 manual checklist.
+- **GS-REV-2: a re-key refused by a cap reported success.** `SensorRegistryCore.rekey` dropped `register()`'s return
+  and always answered `REKEYED`, so a duplicate whose fresh identity a cap refused looked registered: no entry
+  existed, the availability word was cleared instead of `over cap`, and an attaching player was not told. The outcome
+  is now propagated as the new `Heartbeat.REKEYED_OVER_CAP`, and the adapter runs both the re-key write-back and its
+  OVER_CAP branch. The NBT rewrite deliberately still happens: keeping the colliding UUID would take the duplicate
+  branch on every heartbeat, burn a fresh UUID each time and never converge. `duplicatesRekeyedTotal` still counts the
+  re-key itself, as §4.3 specifies. Evidence:
+  `SensorRegistryCoreTest.aRekeyRefusedByTheCapReportsItAndCreatesNothing` (negative control: make `rekey` ignore the
+  outcome again -> that test alone fails).
+- **GS-REV-3: GT's paste direction could erase a live sensor.** `allowsCopyPasteTool() == false` gates only
+  `BehaviourCoverTool`'s copy branch (`:73-87`). The paste branch (`:88-99`) is gated on the numeric cover id alone
+  and calls `ICoverable.updateAttachedCover`, which is `readFromNbt` on the **live** cover object
+  (`CoverableTileEntity.java:498-502`); 1.7.10 item ids are assigned per save, so the id check is not an identity
+  check across saves, and `updateAttachedCover(int, ForgeDirection, NBTTagCompound)` is public `ICoverable` API any
+  mod can call. `readDataFromNbt` now refuses to downgrade: a cover that already has an identity ignores a `d` tag
+  that does not read as `Status.VALID`. A freshly built cover has no identity (`CoverRegistry.buildCoverFromNbt`,
+  `CoverPlacer.placeCover`), so world load, item pickup and the §3.3 rollback-preservation rule are untouched, and a
+  valid sensor compound is still applied. §3.4's row no longer claims the flag covers the paste direction or the
+  Matter Manipulator (which is not in the pinned sources). Evidence:
+  `SensorCoverTests.pastedForeignDataDoesNotEraseALiveSensor` (negative control: remove the guard -> that test alone
+  fails with "a foreign compound erased the sensor identity").
+- **GS-REV-4: a sensor weatherproofs the face it sits on.** `BaseMetaTileEntity.isRainExposed()`
+  (`BaseMetaTileEntity.java:250-265`) treats every side with `hasCoverAtSide` as not exposed, and `Cover.isValid()` is
+  `coverID != 0 && side != UNKNOWN`, so no cover can opt out; `handleRainExposure` (`:506-550`) gates GT's rain fire
+  and the rain and thunder explosions on it, and both are on by default. Not fixable in GregScope code and identical
+  for every GT cover, so it is documented in §1.4 as the one exception to "read-only towards the machine", accepted
+  for release, and added to the GS-121 manual checklist. No code change.
+- **GS-107-02: the third strike dropped the open minute.** `strike()` was the only exit from LIVE that passed no gap
+  reason to `toTombstone`, so `closeOpenMinute` was skipped and `freeRings()` threw away up to 59 s of folded minute
+  data at the moment a machine was destroyed - the interesting minute. It now passes `GapReason.TARGET_MISSING`, the
+  same reason the strike seconds carry. §4.3's MISSING row says so. Evidence:
+  `SensorRegistryCoreTest.theThirdStrikeQueuesThePartialMinuteBeforeFreeingTheRings`.
+- **GS-107-03: `lastSeen` never advanced without a sample.** Only a successful sample or a resume refreshed it, and
+  UNLOADED entries expire on `now - lastSeen > staleExpiryDays`. With `sampling.enabled=false` (a supported config) a
+  sensor that heartbeated for a month would be expired by its first chunk unload. `unloaded()` now stamps `lastSeen`
+  before the state change; that is a slow path, so the heartbeat fast path stays clock-free. Evidence:
+  `SensorRegistryCoreTest.anUnloadRefreshesLastSeenSoTheStaleWindowStartsThere`, which also asserts the fast path
+  reads no clock.
+- **GS-107-04: `seen` is persisted but does not mark the registry dirty.** Marking dirty whenever `lastSeen` advances
+  would pin the flag true every second and make it useless, so the contract is written down in §8.3 instead: GS-109's
+  shutdown save runs regardless of `dirty`. No code change; nothing reads `dirty()` yet.
+- **GS-107-05: the shipped heartbeat did two map lookups.** See the GS-107 note above; the availability word now comes
+  from `Heartbeat.availability()`. Evidence: `SensorRegistryCoreTest.everyHeartbeatOutcomeCarriesItsAvailabilityWord`.
+- **GS-108-01 / GS108-T1: `tinyBudgetSkips` asserted JIT state.** `exceeded > 0` and `skipped > 0` hold only while the
+  sample path is interpreted (80-160 us per sample); warmed up it costs 6-8 us, and 64 sensors over 20 buckets put
+  about 4 samples (~30 us) in a tick against the 100 us budget, so neither counter could move. Any later batch that
+  sorts before `gregscope.sampler.budget` and warms the path would have turned a correct implementation into a red CI
+  run. Those two assertions are now logged as observations, and what is asserted is hardware-independent: every
+  sensor is sampled or given a `sampling_skipped` gap at least twice; a skip implies at least one budget-exceeded
+  tick; and if nothing was skipped, every sensor was sampled in all but at most one interval. The budget arithmetic
+  itself stays pinned deterministically by `SamplerScheduleTest` over a fake `nanoTime`. Evidence that the retained
+  invariant is not vacuous: with `SamplerSchedule.serveCarry` no longer calling `sink.skip`, `tinyBudgetSkips` fails
+  with "a sensor was neither sampled nor skipped often enough in 6 intervals: 1".
+- **GS108-T2: the documented worst-case suite time was wrong.** The sum of the longest `timeoutTicks` over the 26
+  batches is 4,220 ticks (211 s), not 4,120; both copies of the figure are corrected and `docs/testing.md` now quotes
+  the measured time of the last run instead of a figure from the GS-105 era.
+- **GS107-T3: sensors accumulated across batches against one quota.** Horizon-QA keeps finished cells loaded and their
+  covers keep heartbeating, so every sensor a batch placed stayed registered and counted against the shared unowned
+  `limits.maxSensorsPerTeam`. Purging alone does not help (a cover whose machine still ticks registers again on the
+  next heartbeat), so the new gametest helper `SensorCleanup` detaches the covers with GT's own `detachCover` and
+  then purges, and every sensor-placing batch has an `@AfterBatch` hook calling it. Evidence: the run log now shows
+  ten `cleanup after a sensor batch` lines (`entries=... coversDetached=... entriesPurged=...`) and the registry is
+  empty between batches.
+- **GS106-T4: `recordEvents` saved and restored a process-global listener.** Two overlapping sequence-based recorders
+  would have restored each other and left a finished test's recorder installed, detaching the registry for the rest of
+  the run. The helper now asserts that the registry is the installed listener when it takes over, and restores
+  `GregScope.registry()` unconditionally, so an overlap fails loudly in the test that caused it.
+- **GS108-T5: `clockSkewRefusedTotal` was a running maximum of a per-frame sum.** Once a sensor was purged, expired or
+  became a tombstone its accumulator was freed, the sum fell back, and the counter stopped reflecting reality.
+  `SampleFolder` now reports `clockSkewRefusedDelta()` for each fold and gap, `TelemetrySampler.store` adds it, and
+  `SamplerStats.onClockSkewRefused` accumulates with the same saturating add as every other counter. Evidence:
+  `SampleFolderTest.aSampleRefusedForClockSkewIsReportedAsADelta`, `.aGapRefusedForClockSkewIsReportedAsADelta` and
+  the new `SamplerStatsTest`. **Known gap:** `SensorRegistryCore.strike()` writes its `target_missing` second straight
+  to the accumulator, not through `SampleFolder`, so a clock-skew refusal on that path is still not counted; the core
+  is `[pure]` and has no stats seam. It is a counter-only inaccuracy on a path that needs both a strike and a clock
+  that went backwards.

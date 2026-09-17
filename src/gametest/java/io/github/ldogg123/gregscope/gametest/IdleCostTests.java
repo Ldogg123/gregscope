@@ -26,10 +26,16 @@ import cpw.mods.fml.common.FMLCommonHandler;
 import cpw.mods.fml.common.Loader;
 import cpw.mods.fml.common.ModContainer;
 import cpw.mods.fml.common.eventhandler.EventBus;
+import cpw.mods.fml.common.eventhandler.SubscribeEvent;
+import cpw.mods.fml.common.gameevent.TickEvent;
 import cpw.mods.fml.common.registry.GameRegistry;
 import gregtech.api.enums.ItemList;
 import io.github.ldogg123.gregscope.GregScope;
+import io.github.ldogg123.gregscope.GregScopeTestHooks;
 import io.github.ldogg123.gregscope.integration.opencomputers.GregTechMachineEnvironment;
+import io.github.ldogg123.gregscope.sampling.SamplerStats;
+import io.github.ldogg123.gregscope.sampling.TelemetryFrame;
+import io.github.ldogg123.gregscope.sampling.TelemetrySampler;
 import li.cil.oc.api.Network;
 import li.cil.oc.api.network.Component;
 import li.cil.oc.api.network.Environment;
@@ -37,7 +43,15 @@ import li.cil.oc.api.network.ManagedEnvironment;
 
 /**
  * Structural evidence for "no idle cost when nobody calls the component" (handoff §12, §13): the running server holds
- * nothing of GregScope that could run periodically. This is not a benchmark; nothing is timed.
+ * exactly one periodic hook of GregScope's, the design-v0.2 §1.4 {@code ServerTickEvent} END handler, and that handler
+ * does nothing while no sensor is LIVE. This is not a benchmark; nothing is timed.
+ *
+ * <p>
+ * GS-108 changed what these tests assert, deliberately. Before it, no GregScope object was subscribed to any bus. Now
+ * exactly one is: {@code TelemetrySampler}, on the FML bus (where 1.7.10 posts {@code ServerTickEvent}), with exactly
+ * one {@code @SubscribeEvent} method taking a {@code ServerTickEvent}. Everything else is unchanged: no listener on
+ * any Forge bus, no registered or loaded GregScope tile entity, no world generator, and no ticking OpenComputers
+ * environment.
  *
  * <p>
  * Reflection here reads Forge, FML and OpenComputers internals that have no public accessor. It is test code only;
@@ -59,25 +73,33 @@ public class IdleCostTests {
     private IdleCostTests() {}
 
     /**
-     * No GregScope object is subscribed to any Forge/FML event bus (1.7.10 tick events arrive on the FML bus), no
-     * GregScope tile entity class is registered or loaded in any world, and no GregScope world generator exists.
+     * The only GregScope object subscribed to any Forge/FML event bus is the sampler, on the FML bus (1.7.10 tick
+     * events arrive there); no GregScope tile entity class is registered or loaded in any world, and no GregScope
+     * world generator exists.
      */
     @GameTest(batch = BATCH)
     public static void noGregScopeListenersTileEntitiesOrGenerators(GameTestHelper helper) {
         helper.assertTrue(Loader.isModLoaded(GregScope.MODID), "GregScope is not loaded");
 
         int listenerObjects = 0;
-        listenerObjects += assertNoGregScopeListeners(helper, "MinecraftForge.EVENT_BUS", MinecraftForge.EVENT_BUS);
-        listenerObjects += assertNoGregScopeListeners(
+        listenerObjects += assertGregScopeListeners(helper, "MinecraftForge.EVENT_BUS", MinecraftForge.EVENT_BUS, 0);
+        listenerObjects += assertGregScopeListeners(
             helper,
             "MinecraftForge.TERRAIN_GEN_BUS",
-            MinecraftForge.TERRAIN_GEN_BUS);
-        listenerObjects += assertNoGregScopeListeners(helper, "MinecraftForge.ORE_GEN_BUS", MinecraftForge.ORE_GEN_BUS);
-        listenerObjects += assertNoGregScopeListeners(
+            MinecraftForge.TERRAIN_GEN_BUS,
+            0);
+        listenerObjects += assertGregScopeListeners(
+            helper,
+            "MinecraftForge.ORE_GEN_BUS",
+            MinecraftForge.ORE_GEN_BUS,
+            0);
+        // GS-108 (design-v0.2 section 1.4): exactly one, the sampler.
+        listenerObjects += assertGregScopeListeners(
             helper,
             "FMLCommonHandler.bus()",
             FMLCommonHandler.instance()
-                .bus());
+                .bus(),
+            1);
         // GT, OC and Forge itself subscribe many listeners; zero would mean the scan is broken.
         helper.assertTrue(listenerObjects > 10, "event bus scan found only " + listenerObjects + " listener objects");
 
@@ -165,21 +187,116 @@ public class IdleCostTests {
             .thenSucceed();
     }
 
+    /**
+     * GS-108, design-v0.2 section 1.4: the sampler declares exactly one {@code @SubscribeEvent} method, it takes a
+     * {@code ServerTickEvent}, and it only works on phase END.
+     */
+    @GameTest(batch = BATCH)
+    public static void exactlyOneServerTickHandler(GameTestHelper helper) {
+        TelemetrySampler sampler = GregScope.sampler();
+        helper.assertNotNull(sampler, "GregScope has no sampler; is the server running?");
+
+        List<Method> handlers = new ArrayList<>();
+        for (Method method : sampler.getClass()
+            .getMethods()) {
+            if (method.isAnnotationPresent(SubscribeEvent.class)) {
+                handlers.add(method);
+            }
+        }
+        helper.assertEquals(1, handlers.size(), "@SubscribeEvent methods on the sampler: " + handlers);
+        Method handler = handlers.get(0);
+        helper.assertEquals(1, handler.getParameterTypes().length, "handler arity");
+        helper.assertEquals(
+            TickEvent.ServerTickEvent.class,
+            handler.getParameterTypes()[0],
+            "the handler must take a ServerTickEvent");
+
+        SamplerStats stats = sampler.stats();
+        long before = stats.ticksTotal();
+        sampler.onServerTick(new TickEvent.ServerTickEvent(TickEvent.Phase.START));
+        helper.assertEquals(before, stats.ticksTotal(), "phase START must do nothing");
+        sampler.onServerTick(new TickEvent.ServerTickEvent(TickEvent.Phase.END));
+        helper.assertEquals(before + 1L, stats.ticksTotal(), "phase END must run one sampler tick");
+        System.out.println("[GregScope gametest] idle#3 one @SubscribeEvent method: " + handler);
+        helper.succeed();
+    }
+
+    /**
+     * GS-108: with no LIVE sensor the tick handler does no per-sensor work at all. The registry is emptied and a whole
+     * interval is then run inside one server tick, so no cover can heartbeat in between and register itself again.
+     */
+    @GameTest(batch = BATCH)
+    public static void handlerDoesNoWorkWithoutLiveSensors(GameTestHelper helper) {
+        TelemetrySampler sampler = GregScope.sampler();
+        helper.assertNotNull(sampler, "GregScope has no sampler; is the server running?");
+        helper.assertTrue(GregScopeTestHooks.purgeAllNow() >= 0, "GregScope test hooks are disabled");
+        helper.assertEquals(
+            0,
+            GregScope.registry()
+                .core()
+                .size(),
+            "the registry is not empty");
+
+        SamplerStats stats = sampler.stats();
+        long ticks = stats.ticksTotal();
+        long cycles = stats.cyclesTotal();
+        long samples = stats.samplesTotal();
+        int interval = sampler.schedule()
+            .intervalTicks();
+
+        helper.assertTrue(GregScopeTestHooks.runIntervalNow(), "GregScope test hooks are disabled");
+
+        helper.assertEquals(ticks + interval, stats.ticksTotal(), "the handler must still count its ticks");
+        helper.assertEquals(cycles, stats.cyclesTotal(), "a tick with no due sensor must do no per-sensor work");
+        helper.assertEquals(samples, stats.samplesTotal(), "nothing may be sampled without a live sensor");
+        helper.assertEquals(
+            0,
+            sampler.schedule()
+                .size(),
+            "the schedule must be empty");
+        TelemetryFrame frame = GregScope.frame();
+        helper.assertEquals(
+            0,
+            frame.sensors()
+                .size(),
+            "the frame published at the interval boundary must be empty");
+        System.out.println(
+            "[GregScope gametest] idle#4 " + interval
+                + " sampler ticks with an empty registry: 0 cycles, 0 samples, frame #"
+                + frame.sequence());
+        helper.succeed();
+    }
+
     // --- reflection helpers (test code only) ---
 
-    /** Returns the number of listener objects on the bus after asserting none is GregScope's. */
-    private static int assertNoGregScopeListeners(GameTestHelper helper, String label, EventBus bus) {
+    /**
+     * Asserts that exactly {@code expected} of the bus's listeners belong to GregScope, counted two independent ways
+     * (the listener object's class and the owning mod container), and returns the number of listener objects seen.
+     */
+    private static int assertGregScopeListeners(GameTestHelper helper, String label, EventBus bus, int expected) {
         Map<?, ?> listeners = (Map<?, ?>) readField(helper, bus, EventBus.class, "listeners");
         Map<?, ?> owners = (Map<?, ?>) readField(helper, bus, EventBus.class, "listenerOwners");
+        List<Object> ours = new ArrayList<>();
         for (Object target : listeners.keySet()) {
             Class<?> type = target instanceof Class ? (Class<?>) target : target.getClass();
-            assertNotShipped(helper, label + " listener", type.getName());
+            if (isShipped(type.getName())) {
+                ours.add(target);
+            }
         }
+        helper.assertEquals(expected, ours.size(), label + " GregScope listener objects: " + ours);
+        int owned = 0;
         for (Map.Entry<?, ?> entry : owners.entrySet()) {
-            String modId = ((ModContainer) entry.getValue()).getModId();
-            helper.assertFalse(
-                GregScope.MODID.equals(modId),
-                label + " has a listener owned by GregScope: " + entry.getKey());
+            if (GregScope.MODID.equals(((ModContainer) entry.getValue()).getModId())) {
+                owned++;
+                helper.assertTrue(
+                    ours.contains(entry.getKey()),
+                    label + " has a GregScope-owned listener that is not a GregScope class: " + entry.getKey());
+            }
+        }
+        helper.assertEquals(expected, owned, label + " listeners owned by the gregscope mod container");
+        if (expected > 0) {
+            helper.assertInstanceOf(TelemetrySampler.class, ours.get(0), label + " GregScope listener");
+            helper.assertSame(GregScope.sampler(), ours.get(0), "the subscribed sampler is not GregScope.sampler()");
         }
         return listeners.size();
     }
@@ -210,9 +327,11 @@ public class IdleCostTests {
     }
 
     private static void assertNotShipped(GameTestHelper helper, String what, String className) {
-        helper.assertFalse(
-            className.startsWith(SHIPPED_PACKAGE) && !className.startsWith(TEST_PACKAGE),
-            what + " belongs to GregScope: " + className);
+        helper.assertFalse(isShipped(className), what + " belongs to GregScope: " + className);
+    }
+
+    private static boolean isShipped(String className) {
+        return className.startsWith(SHIPPED_PACKAGE) && !className.startsWith(TEST_PACKAGE);
     }
 
     private static List<Object> compoundChildren(GameTestHelper helper, ManagedEnvironment compound) {

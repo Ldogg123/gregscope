@@ -9,7 +9,7 @@ import java.util.Map;
 
 /**
  * Immutable, normalized machine snapshot (schema v1). The map view contains only Integer, Long, Double, Boolean, String
- * and unmodifiable List&lt;String&gt; values, never null, in {@link SnapshotKeys#ORDER}.
+ * and unmodifiable List&lt;String&gt; values, never null, in {@link SnapshotKeys#ORDER}. [pure]
  */
 public final class MachineSnapshot {
 

@@ -57,6 +57,7 @@ public final class GtnhlibTeamResolver implements TeamResolver<Team> {
     }
 
     /** Forgets cached {@link #teamOf} results, so the next lookup sees current teams. */
+    @Override
     public void clearCache() {
         cache.clear();
     }

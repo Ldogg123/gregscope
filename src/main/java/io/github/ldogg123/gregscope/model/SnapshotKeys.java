@@ -6,7 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Snapshot map keys, their canonical order, and the keys every snapshot must contain. */
+/** Snapshot map keys, their canonical order, and the keys every snapshot must contain. [pure] */
 public final class SnapshotKeys {
 
     public static final String SCHEMA_VERSION = "schemaVersion";

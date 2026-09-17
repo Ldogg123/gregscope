@@ -55,6 +55,29 @@ class ShippedClassesTest {
         // GS-104 access policy and the GTNHLib team adapter; scanned like every shipped class.
         ROOT + "access/AccessPolicy",
         ROOT + "access/GtnhlibTeamResolver",
+        // GS-105 Machine Sensor item, cover and registration.
+        ROOT + "GregScopeAssets",
+        ROOT + "sensor/ItemMachineSensor",
+        ROOT + "sensor/MachineSensorCover",
+        ROOT + "sensor/SensorCovers",
+        ROOT + "sensor/SensorCover",
+        ROOT + "sensor/SensorKind",
+        // GS-106 cover behaviour: the NBT seam adapter, the registry event interface and the description text.
+        ROOT + "sensor/NbtKeyValue",
+        ROOT + "sensor/SensorEvents",
+        ROOT + "sensor/SensorDescription",
+        // GS-107 registry: the pure state machine and its MC adapter.
+        ROOT + "registry/SensorRegistryCore",
+        ROOT + "registry/SensorEntry",
+        ROOT + "registry/SensorState",
+        ROOT + "registry/SensorRegistry",
+        // GS-108 sampler: the pure schedule, frame and fold, the world resolver and the one tick handler.
+        ROOT + "sampling/SamplerSchedule",
+        ROOT + "sampling/SampleFolder",
+        ROOT + "sampling/TelemetryFrame",
+        ROOT + "sampling/SensorView",
+        ROOT + "sampling/TargetResolver",
+        ROOT + "sampling/TelemetrySampler",
         ROOT + "integration/opencomputers/GregTechMachineEnvironment",
         ROOT + "integration/opencomputers/GregTechMachineDriver",
         ROOT + "probe/GregTechMachineProbe",
@@ -86,6 +109,33 @@ class ShippedClassesTest {
     private static final Set<String> TICK_MEMBER_NAMES = new HashSet<>(
         Arrays.asList("canUpdate", "update", "updateEntity"));
     private static final String TILE_ENTITY = "net/minecraft/tileentity/TileEntity";
+
+    private static final String GAME_REGISTRY = "cpw/mods/fml/common/registry/GameRegistry";
+    /**
+     * GS-105 lifts "no items" (design-v0.2 §1.4): {@code GameRegistry} may be referenced by this one registration
+     * class,
+     * and there only for items. Registering world generators or tile entities stays forbidden everywhere (GS-112 lifts
+     * tile entity registration for the Hub, and only that).
+     */
+    private static final Set<String> GAME_REGISTRY_USERS = new HashSet<>(Arrays.asList(ROOT + "sensor/SensorCovers"));
+    /** {@code register*} names the registration class may reference: GameRegistry's item call and GT's cover call. */
+    private static final Set<String> GAME_REGISTRY_ALLOWED_MEMBERS = new HashSet<>(
+        Arrays.asList("registerItem", "registerCover"));
+    private static final List<String> REGISTRATION_MEMBER_NAMES = Arrays
+        .asList("registerWorldGenerator", "registerTileEntity", "registerTileEntityWithAlternatives", "registerBlock");
+
+    /**
+     * GS-108 lifts "no global tick handler" (design-v0.2 section 1.4) for <b>exactly one</b> class: the sampler is the
+     * only shipped class that may name the FML event bus and the tick event. Everything else in
+     * {@link #PERIODIC_WORK_REFERENCES} stays forbidden for it too, so it can still not start a thread, a timer or an
+     * executor (GS-109 lifts the I/O thread) and cannot register a world generator or a tile entity.
+     */
+    private static final String TICK_HANDLER = ROOT + "sampling/TelemetrySampler";
+    private static final List<String> TICK_HANDLER_REFERENCES = Arrays.asList(
+        "cpw/mods/fml/common/eventhandler/SubscribeEvent",
+        "cpw/mods/fml/common/eventhandler/EventBus",
+        "cpw/mods/fml/common/gameevent/TickEvent",
+        "cpw/mods/fml/common/FMLCommonHandler");
 
     private static TreeMap<String, ClassInfo> classes;
 
@@ -173,11 +223,21 @@ class ShippedClassesTest {
         for (ClassInfo info : classes.values()) {
             for (String utf8 : info.utf8) {
                 for (String reference : PERIODIC_WORK_REFERENCES) {
+                    if (GAME_REGISTRY.equals(reference) && GAME_REGISTRY_USERS.contains(info.name)
+                        && utf8.equals(GAME_REGISTRY)) {
+                        continue;
+                    }
+                    if (TICK_HANDLER.equals(info.name) && TICK_HANDLER_REFERENCES.contains(reference)) {
+                        continue;
+                    }
                     if (utf8.contains(reference)) {
                         violations.add(info.name + " references " + utf8);
                     }
                 }
                 if (TICK_MEMBER_NAMES.contains(utf8)) {
+                    violations.add(info.name + " declares or calls " + utf8);
+                }
+                if (REGISTRATION_MEMBER_NAMES.contains(utf8)) {
                     violations.add(info.name + " declares or calls " + utf8);
                 }
             }
@@ -216,6 +276,70 @@ class ShippedClassesTest {
             "@SidedProxy serverSide does not name CommonProxy");
         assertTrue(classes.get(clientProxy).utf8.contains("gregscope.clientProxyLoaded"), "marker property not set");
         assertEquals(ROOT + "CommonProxy", classes.get(clientProxy).superName);
+    }
+
+    /**
+     * The GS-105 lift is narrow: the one registration class references {@code GameRegistry} and calls
+     * {@code registerItem} (so the scan cannot pass vacuously), and nothing else is called on it.
+     */
+    @Test
+    void gameRegistryIsUsedOnlyToRegisterTheSensorItem() {
+        for (String user : GAME_REGISTRY_USERS) {
+            ClassInfo info = classes.get(user);
+            assertTrue(info != null, "registration class not scanned: " + user);
+            assertTrue(info.utf8.contains(GAME_REGISTRY), user + " no longer references GameRegistry; narrow the lift");
+            assertTrue(info.utf8.contains("registerItem"), user + " does not call registerItem");
+        }
+        // This reader does not tie member names to their owner, so every register* name in the class must be allowed.
+        List<String> violations = new ArrayList<>();
+        for (String user : GAME_REGISTRY_USERS) {
+            for (String utf8 : classes.get(user).utf8) {
+                if (utf8.startsWith("register") && !GAME_REGISTRY_ALLOWED_MEMBERS.contains(utf8)) {
+                    violations.add(user + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), violations, "unexpected register* calls in the registration class");
+    }
+
+    /**
+     * The GS-108 lift is narrow too: the sampler really is a {@code ServerTickEvent} handler on the FML bus (so the
+     * skip in {@code noPeriodicWorkHooks} cannot pass vacuously), and no other shipped class names any of the four
+     * tick references, which {@code noPeriodicWorkHooks} enforces for every class but this one. That there is exactly
+     * <b>one</b> {@code @SubscribeEvent} method, and that it takes a {@code ServerTickEvent}, is checked on the
+     * running server by {@code IdleCostTests.exactlyOneServerTickHandler}: this reader sees the constant pool, not the
+     * method table.
+     */
+    @Test
+    void theOnlyTickHandlerIsTheSampler() {
+        ClassInfo sampler = classes.get(TICK_HANDLER);
+        assertTrue(sampler != null, "the sampler was not scanned: " + TICK_HANDLER);
+        for (String reference : TICK_HANDLER_REFERENCES) {
+            boolean seen = false;
+            for (String utf8 : sampler.utf8) {
+                seen |= utf8.contains(reference);
+            }
+            assertTrue(seen, TICK_HANDLER + " no longer references " + reference + "; narrow the lift");
+        }
+        assertTrue(
+            sampler.utf8.contains("Lcpw/mods/fml/common/eventhandler/SubscribeEvent;"),
+            "the sampler has no @SubscribeEvent annotation");
+        assertTrue(
+            sampler.utf8.contains("cpw/mods/fml/common/gameevent/TickEvent$ServerTickEvent"),
+            "the sampler does not name ServerTickEvent");
+        assertTrue(
+            sampler.utf8.contains("cpw/mods/fml/common/gameevent/TickEvent$Phase"),
+            "the sampler does not name TickEvent.Phase, so it cannot be filtering on END");
+        // The lift is only about the four tick references: threads, timers and executors stay forbidden here too.
+        List<String> violations = new ArrayList<>();
+        for (String utf8 : sampler.utf8) {
+            for (String reference : PERIODIC_WORK_REFERENCES) {
+                if (!TICK_HANDLER_REFERENCES.contains(reference) && utf8.contains(reference)) {
+                    violations.add(TICK_HANDLER + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), violations, "the sampler may only use the tick references");
     }
 
     /** A negative control for the scanner itself: it must see what it looks for in a real class file. */

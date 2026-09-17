@@ -37,6 +37,12 @@ import org.junit.jupiter.api.Test;
  * {@code history/HistoryIo}, {@code sampling/TelemetrySampler}) must list them there on purpose.
  *
  * <p>
+ * GS-105 lists the sensor package's MC adapters ({@code ItemMachineSensor}, {@code MachineSensorCover},
+ * {@code SensorCovers}) in {@link #IMPURE} and adds the pure {@code GregScopeAssets}, {@code SensorKind} and
+ * {@code SensorCover}. GS-106 adds the pure {@code SensorDescription} and two more adapters, {@code NbtKeyValue} (the
+ * {@code NBTTagCompound} side of the {@code KeyValue} seam) and {@code SensorEvents} (GT types in its signatures).
+ *
+ * <p>
  * GS-104 adds the {@code access} package: {@code AccessPolicy}, {@code TeamResolver} and {@code Viewer} are pure;
  * {@code GtnhlibTeamResolver} is the one listed adapter (design-v0.2 §2: the sole importer of GTNHLib teams).
  *
@@ -64,6 +70,8 @@ class PureSourcesTest {
         "sensor/SensorIdentity.java",
         "sensor/SensorNbtCodec.java",
         "sensor/KeyValue.java",
+        // GS-106: the cover description text, kept out of the cover so it can be unit tested.
+        "sensor/SensorDescription.java",
         "history/SecondRing.java",
         "history/MinuteSlot.java",
         "history/MinuteAccumulator.java",
@@ -81,12 +89,56 @@ class PureSourcesTest {
         // GS-104 (§5, §14)
         "access/AccessPolicy.java",
         "access/TeamResolver.java",
-        "access/Viewer.java");
+        "access/Viewer.java",
+        // GS-105 (§3.2, §12.2) and the design-v0.3 GS-201 A2 hook: asset names, sensor kinds, the SensorCover seam.
+        "GregScopeAssets.java",
+        "sensor/SensorKind.java",
+        "sensor/SensorCover.java",
+        // GS-107 (section 4) plus the design-v0.3 GS-201 A1 reverse-index key.
+        "registry/SensorState.java",
+        "registry/RemovalCause.java",
+        "registry/PosKey.java",
+        "registry/SensorEntry.java",
+        "registry/RegistryEvents.java",
+        "registry/SensorRegistryCore.java",
+        // The v0.1 snapshot model a registry entry holds; pure in fact since v0.1, marked and enforced with GS-107.
+        "model/MachineSnapshot.java",
+        "model/MachineKind.java",
+        "model/SnapshotKeys.java",
+        "model/StatusIds.java",
+        // GS-108 (sections 6.1, 6.3, 7.6, 7.7) plus the design-v0.3 GS-201 A6 CountersView interface.
+        "sampling/SamplerSchedule.java",
+        "sampling/SampleFolder.java",
+        "sampling/SamplerStats.java",
+        "sampling/SamplerStatsView.java",
+        "sampling/LimitsView.java",
+        "sampling/CountersView.java",
+        "sampling/MachineCountersView.java",
+        "sampling/SensorView.java",
+        "sampling/TelemetryFrame.java",
+        // The settings a LimitsView copies; pure in fact since GS-101, and reached by the bytecode check.
+        "config/Settings.java",
+        "config/ConfigKeys.java");
 
-    private static final List<String> PURE_PACKAGES = Arrays.asList("history", "sensor", "sampling", "access");
+    private static final List<String> PURE_PACKAGES = Arrays
+        .asList("history", "sensor", "sampling", "access", "registry", "model");
 
     /** Files in {@link #PURE_PACKAGES} allowed to touch game classes, each on purpose. */
-    private static final Set<String> IMPURE = Collections.singleton("access/GtnhlibTeamResolver.java");
+    private static final Set<String> IMPURE = new HashSet<>(
+        Arrays.asList(
+            "access/GtnhlibTeamResolver.java",
+            // GS-105: the §2 MC adapters of the sensor package (item, cover, registration and placement rule).
+            "sensor/ItemMachineSensor.java",
+            "sensor/MachineSensorCover.java",
+            "sensor/SensorCovers.java",
+            // GS-106: the NBT seam adapter and the event interface the cover reports through (both take GT/MC types).
+            "sensor/NbtKeyValue.java",
+            "sensor/SensorEvents.java",
+            // GS-107: the MC adapter of the registry (world lookups, cover NBT re-key, chat, server tick).
+            "registry/SensorRegistry.java",
+            // GS-108: the world half of section 6.2 and the one ServerTickEvent handler.
+            "sampling/TargetResolver.java",
+            "sampling/TelemetrySampler.java"));
 
     static final List<String> FORBIDDEN = Arrays.asList(
         "net.minecraft.",

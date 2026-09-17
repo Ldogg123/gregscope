@@ -15,6 +15,13 @@ import java.util.UUID;
  */
 public interface TeamResolver<T> {
 
+    /**
+     * Drops whatever the resolver cached, so the next question reads the live team system again. A caller that keeps
+     * one resolver for longer than a rebuild (the sensor registry keeps one for the whole server run) calls this
+     * before each independent question. The default is a no-op, for resolvers that cache nothing.
+     */
+    default void clearCache() {}
+
     /** The first team that has {@code player} as a member, or null if there is none or {@code player} is null. */
     T teamOf(UUID player);
 

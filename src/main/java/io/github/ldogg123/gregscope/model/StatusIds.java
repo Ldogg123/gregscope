@@ -2,7 +2,7 @@ package io.github.ldogg123.gregscope.model;
 
 /**
  * Status and warning IDs owned by GregScope. GT-derived IDs (shutdown reasons, recipe check results) are passed through
- * verbatim and are not listed here.
+ * verbatim and are not listed here. [pure]
  */
 public final class StatusIds {
 

@@ -45,7 +45,7 @@ public final class GregTechMachineProbe implements MachineProbe {
             return false;
         }
         IGregTechTileEntity holder = (IGregTechTileEntity) tile;
-        return holder.canAccessData() && isSupported(holder.getMetaTileEntity());
+        return holder.canAccessData() && isSupportedMte(holder.getMetaTileEntity());
     }
 
     @Override
@@ -65,7 +65,7 @@ public final class GregTechMachineProbe implements MachineProbe {
             return null;
         }
         IMetaTileEntity mte = holder.getMetaTileEntity();
-        if (mte == null || mte.getBaseMetaTileEntity() != holder || !isSupported(mte)) {
+        if (mte == null || mte.getBaseMetaTileEntity() != holder || !isSupportedMte(mte)) {
             return null;
         }
 
@@ -79,7 +79,12 @@ public final class GregTechMachineProbe implements MachineProbe {
         return SnapshotBuilder.build(r);
     }
 
-    private static boolean isSupported(IMetaTileEntity mte) {
+    /**
+     * The machines GregScope reads: GT basic machines and multiblock controllers (hatches, casings, pipes and cables
+     * are
+     * neither). Public for the Machine Sensor placement rule (design-v0.2 §3.2); {@code null} is not supported.
+     */
+    public static boolean isSupportedMte(IMetaTileEntity mte) {
         return mte instanceof MTEBasicMachine || mte instanceof MTEMultiBlockBase;
     }
 
