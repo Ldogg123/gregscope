@@ -37,7 +37,8 @@ public final class GregTechMachineDriver extends DriverSidedTileEntity {
     /**
      * Returns a live environment for any GT holder, even one that stopped being supported since {@link #worksWith}: a
      * null environment would leave the Adapter's cached compound component without GregScope until its driver set
-     * changes. The environment's callback soft-errors instead.
+     * changes. The environment's callback soft-errors instead. The environment is bound to the position, not to this
+     * tile entity, so it keeps working when the machine's tile entity is replaced (for example by a chunk reload).
      */
     @Override
     public GregTechMachineEnvironment createEnvironment(World world, int x, int y, int z, ForgeDirection side) {
@@ -50,6 +51,6 @@ public final class GregTechMachineDriver extends DriverSidedTileEntity {
         if (!(tile instanceof IGregTechTileEntity)) {
             return null;
         }
-        return new GregTechMachineEnvironment(probe, tile);
+        return new GregTechMachineEnvironment(probe, world, x, y, z);
     }
 }

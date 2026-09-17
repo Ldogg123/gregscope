@@ -15,14 +15,15 @@ import com.gtnewhorizons.horizonqa.api.TestPos;
 
 /**
  * Really unloads and reloads the chunks holding a test cell, through the server's own chunk provider and region
- * storage, using public Forge/Minecraft API only.
+ * storage, using public Forge/Minecraft API plus Hodgepodge's public generation hook.
  *
  * <p>
  * Horizon-QA keeps every test cell loaded with ForgeChunkManager tickets and only releases them after the whole run.
- * {@link #unload()} temporarily unforces every ticket on the chunks, queues them for unloading (moving the world spawn
- * far
- * away for that one call, so the spawn-area protection cannot veto it) and runs {@code unloadQueuedChunks()}: tile
- * entities are written to chunk NBT and marked for {@code onChunkUnload()}, which the world runs in its next entity
+ * {@link #unload()} temporarily unforces every ticket on the chunks, clears Hodgepodge's fresh-generation unload
+ * protection for them ({@link HodgepodgeChunkGen}), queues them for unloading (moving the world spawn far away for that
+ * one call, so the spawn-area protection cannot veto it) and runs {@code unloadQueuedChunks()} until they are gone:
+ * tile entities are written to chunk NBT and marked for {@code onChunkUnload()}, which the world runs in its next
+ * entity
  * update. {@link #reload()} loads the chunks back from region storage (or the pending-write queue), which creates new
  * tile entities from that NBT, and re-forces the same tickets.
  *
@@ -30,8 +31,27 @@ import com.gtnewhorizons.horizonqa.api.TestPos;
  * While the chunks are unloaded, callers must not touch them through {@code World.getTileEntity}, {@code getBlock} or
  * Horizon-QA's GT helpers: those silently load them again. Use {@link #anyLoaded()} and the objects captured before the
  * unload.
+ *
+ * <p>
+ * If a test fails while its chunks are unloaded, the cleanup re-forces the tickets and loads the chunks again in the
+ * failing tick (Horizon-QA runs cleanups synchronously, after its own isolation scan, which may already have loaded
+ * them
+ * without forcing). The old tile entities are only queued for removal at that point, so on that failure path old and
+ * new tile entities of the failed test's cell can both update once in the next world tick before the old ones get
+ * {@code onChunkUnload()}. This can add GT/OC side effects and log noise after the first failure, never a pass.
  */
 final class ChunkReload {
+
+    /**
+     * {@code unloadQueuedChunks()} unloads at most 100 queued chunks per call. The unload queue can hold hundreds of
+     * other chunks: the void world's spawn is far from the test grid, so for example a world save
+     * ({@code WorldServer.saveAllChunks}) queues every loaded chunk that is not force-loaded. One call can then skip
+     * the
+     * test's chunks (reproduced only with a forced save). Further calls do what the server's next ticks would do. This
+     * loop does NOT get past Hodgepodge's fresh-generation protection, which is what failed on CI and on every fresh
+     * world; {@link HodgepodgeChunkGen} handles that.
+     */
+    private static final int MAX_UNLOAD_CALLS = 64;
 
     private final GameTestHelper helper;
     private final WorldServer world;
@@ -48,8 +68,7 @@ final class ChunkReload {
 
     /**
      * Every chunk overlapping the test-local box {@code min..max} (a test cell may straddle a chunk border). Registers
-     * a
-     * cleanup that reloads and re-forces the chunks if the test ends while they are unloaded.
+     * a cleanup that reloads and re-forces the chunks if the test ends while they are unloaded.
      */
     static ChunkReload of(GameTestHelper helper, TestPos min, TestPos max) {
         TestPos a = helper.absolute(min);
@@ -62,6 +81,20 @@ final class ChunkReload {
         }
         helper.afterTest(reload::restoreQuietly);
         return reload;
+    }
+
+    /**
+     * Only the one chunk holding the test-local position, even if the test cell spans other chunks. Blocks of the same
+     * cell in neighbouring chunks stay loaded.
+     */
+    static ChunkReload ofChunkAt(GameTestHelper helper, TestPos local) {
+        return of(helper, local, local);
+    }
+
+    /** Whether the chunk holding the test-local position is loaded; never loads it. */
+    static boolean isChunkLoaded(GameTestHelper helper, TestPos local) {
+        TestPos abs = helper.absolute(local);
+        return helper.getWorld().theChunkProviderServer.chunkExists(abs.x() >> 4, abs.z() >> 4);
     }
 
     /** True only if every chunk is loaded. */
@@ -106,6 +139,7 @@ final class ChunkReload {
                 ForgeChunkManager.unforceChunk(ticket, chunks.get(i));
             }
         }
+        HodgepodgeChunkGen.clearFreshGenerationProtection(world, chunks);
         ChunkCoordinates spawn = world.getSpawnPoint();
         try {
             world.setSpawnLocation(spawn.posX + 1_000_000, spawn.posY, spawn.posZ + 1_000_000);
@@ -115,8 +149,11 @@ final class ChunkReload {
         } finally {
             world.setSpawnLocation(spawn.posX, spawn.posY, spawn.posZ);
         }
-        provider.unloadQueuedChunks();
-        helper.assertFalse(anyLoaded(), this + " still loaded after unloadQueuedChunks()");
+        for (int call = 0; call < MAX_UNLOAD_CALLS && anyLoaded(); call++) {
+            provider.unloadQueuedChunks();
+        }
+        helper
+            .assertFalse(anyLoaded(), this + " still loaded after " + MAX_UNLOAD_CALLS + " unloadQueuedChunks() calls");
     }
 
     void reload() {

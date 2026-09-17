@@ -1,6 +1,6 @@
 package io.github.ldogg123.gregscope.integration.opencomputers;
 
-import net.minecraft.tileentity.TileEntity;
+import net.minecraft.world.World;
 
 import io.github.ldogg123.gregscope.model.MachineSnapshot;
 import io.github.ldogg123.gregscope.probe.MachineProbe;
@@ -13,8 +13,10 @@ import li.cil.oc.api.network.Visibility;
 import li.cil.oc.api.prefab.ManagedEnvironment;
 
 /**
- * Read-only OpenComputers environment exposing {@code getSnapshot()} for one GT machine. Holds only the tile reference;
- * the probe revalidates the target on every call. Does not tick.
+ * Read-only OpenComputers environment exposing {@code getSnapshot()} for the GT machine at one position: the block the
+ * Adapter touches. It holds the world and coordinates, not a tile entity, and resolves the machine on every call, so it
+ * follows a machine whose chunk was unloaded and loaded again (a new tile entity) and reports whatever supported GT
+ * machine is at that position now. Does not tick.
  *
  * <p>
  * This class must stay final and declare its callbacks directly: OpenComputers only invokes callbacks of a merged
@@ -35,11 +37,17 @@ public final class GregTechMachineEnvironment extends ManagedEnvironment impleme
     static final String UNAVAILABLE = "machine unavailable";
 
     private final MachineProbe probe;
-    private final TileEntity tile;
+    private final World world;
+    private final int x;
+    private final int y;
+    private final int z;
 
-    GregTechMachineEnvironment(MachineProbe probe, TileEntity tile) {
+    GregTechMachineEnvironment(MachineProbe probe, World world, int x, int y, int z) {
         this.probe = probe;
-        this.tile = tile;
+        this.world = world;
+        this.x = x;
+        this.y = y;
+        this.z = z;
         setNode(
             Network.newNode(this, Visibility.Network)
                 .withComponent(COMPONENT_NAME)
@@ -59,7 +67,7 @@ public final class GregTechMachineEnvironment extends ManagedEnvironment impleme
     @Callback(
         doc = "function():table -- Read-only GT machine telemetry snapshot (schema v1), or nil and an error message.")
     public Object[] getSnapshot(Context context, Arguments args) {
-        MachineSnapshot snapshot = probe.snapshot(tile);
+        MachineSnapshot snapshot = probe.snapshotAt(world, x, y, z);
         return snapshot == null ? new Object[] { null, UNAVAILABLE } : new Object[] { snapshot.toMap() };
     }
 }

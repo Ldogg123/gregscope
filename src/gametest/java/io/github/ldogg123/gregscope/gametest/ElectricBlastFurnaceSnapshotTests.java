@@ -42,6 +42,10 @@ public class ElectricBlastFurnaceSnapshotTests {
     /** Cell-local warp range: covers the 3x4x3 template and stops short of the next cell (8 blocks away). */
     private static final int WARP_RANGE = 4;
     private static final int LOW_HEAT = 1_200;
+    /**
+     * Template heat: cupronickel coils (1801 K) plus 100 K per voltage tier above MV on its EV hatch (GT's formula).
+     */
+    private static final int TEMPLATE_HEAT = 2_001;
     /** Long enough to observe mid-recipe; EV recipe on the template's EV hatch leaves no room for overclocks. */
     private static final int LONG_RECIPE_TICKS = 400;
     private static final int START_TIMEOUT_TICKS = 40;
@@ -264,6 +268,40 @@ public class ElectricBlastFurnaceSnapshotTests {
         helper.assertEquals("power_loss", s.get("shutdownReasonId"), "shutdownReasonId in " + s);
         helper.assertTrue(Snapshots.bool(helper, s, "shutdownCritical"), "shutdownCritical in " + s);
         helper.assertFalse(Snapshots.bool(helper, s, "active"), "active in " + s);
+        helper.succeed();
+    }
+
+    // 11
+    @GameTest(template = TEMPLATE, timeoutTicks = 200, batch = BATCH)
+    public static void recipeAboveCoilHeatIsWaiting(GameTestHelper helper) {
+        Multiblock ebf = formedEbf(helper);
+        // Same setup as GT's recipeAboveHeatNeverStarts: the recipe needs 100 K more than the template's coils give.
+        // Input and EU are there and work is allowed, so only the heat check can stop it.
+        addRecipe(helper, ebf, Blocks.pumpkin, Blocks.melon_block, TEMPLATE_HEAT + 100, 20, TierEU.RECIPE_MV);
+        ebf.inputBus(0)
+            .insert(new ItemStack(Blocks.pumpkin, 1));
+        ebf.energyHatch(0)
+            .supply(TierEU.EV, 1, 150);
+        helper.gtnh()
+            .fastForwardTicks(100);
+
+        Map<String, Object> s = Snapshots.probe(helper, CONTROLLER, "ebf#11 recipe above coil heat");
+        Snapshots.assertStatus(helper, s, "waiting", "insufficient_heat");
+        helper.assertEquals("insufficient_heat", s.get("recipeCheckResultId"), "recipeCheckResultId in " + s);
+        helper.assertFalse(Snapshots.bool(helper, s, "recipeCheckSuccessful"), "recipeCheckSuccessful in " + s);
+        helper.assertTrue(Snapshots.bool(helper, s, "formed"), "formed in " + s);
+        helper.assertTrue(Snapshots.bool(helper, s, "allowedToWork"), "allowedToWork in " + s);
+        helper.assertFalse(Snapshots.bool(helper, s, "wasShutdown"), "wasShutdown in " + s);
+        helper.assertFalse(Snapshots.bool(helper, s, "active"), "active in " + s);
+        helper.assertEquals(0L, Snapshots.number(helper, s, "maxProgressTicks"), "maxProgressTicks in " + s);
+        Snapshots.assertAbsent(helper, s, "euPerTick");
+        helper.assertTrue(Snapshots.number(helper, s, "energyStored") > 0, "energyStored in " + s);
+        helper.assertTrue(
+            Snapshots.warnings(helper, s)
+                .isEmpty(),
+            "warnings in " + s);
+        ebf.inputBus(0)
+            .assertContains(new ItemStack(Blocks.pumpkin, 1));
         helper.succeed();
     }
 

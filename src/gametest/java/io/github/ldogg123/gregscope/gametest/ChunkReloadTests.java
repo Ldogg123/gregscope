@@ -26,7 +26,6 @@ import li.cil.oc.api.Network;
 import li.cil.oc.api.network.Component;
 import li.cil.oc.api.network.Environment;
 import li.cil.oc.api.network.ManagedEnvironment;
-import li.cil.oc.api.network.Node;
 
 /**
  * Chunk unload/reload of GT machines watched through GregScope's probe and OpenComputers (GS-004 "chunk unload/reload,
@@ -42,17 +41,23 @@ import li.cil.oc.api.network.Node;
  * <b>What this covers of a server restart:</b> the same tile-entity NBT round trip a restart uses (GT recreating the
  * meta tile entity from its saved ID and restoring its saved fields, OC's Adapter restoring its node and per-driver
  * component addresses and re-attaching its drivers, including GregScope's {@code worksWith} on a freshly loaded
- * machine), the chunk-serialization code of the mods installed in the dev pack (e.g. Hodgepodge's chunk unload), and
- * GT's non-persisted state ({@code mMachine}, startup check) after load.
+ * machine), the chunk-serialization code of the mods installed in the dev pack (e.g. Hodgepodge's chunk unload, with
+ * its
+ * fresh-generation unload protection cleared for the test chunks, see {@link HodgepodgeChunkGen}), and GT's
+ * non-persisted state ({@code mMachine}, startup check) after load.
  *
  * <p>
  * <b>Not covered:</b> a JVM restart itself: static and global state being rebuilt (OC's driver registry, GT's global
  * trackers, AE/wireless networks), the world and ForgeChunkManager tickets being loaded at startup, spawn-area
  * preloading before the first tick, OC computer state persisted across processes, and other mods' world saved data.
  * GregScope keeps no saved data or global state. Starting GregScope on a dedicated server is covered by the CI run
- * itself, which runs these tests on one. Also not covered: an Adapter in a different chunk from the machine, where only
- * the machine's chunk unloads (OpenComputers' source suggests the Adapter keeps the environment bound to the old
- * tile; not verified in-game).
+ * itself, which runs these tests on one.
+ *
+ * <p>
+ * {@link #adapterInOtherChunkSeesMachineAfterItsChunkReloads} places the Adapter and the machine on opposite sides of a
+ * chunk border and unloads only the machine's chunk: the Adapter keeps its merged component, and GregScope's
+ * position-bound environment reads the reloaded machine through it (before the fix, a tile-bound environment kept
+ * returning {@code machine unavailable}).
  *
  * <p>
  * Each test runs in its own batch: unloading a chunk also unloads anything else in it, including cells of tests that
@@ -102,7 +107,9 @@ public class ChunkReloadTests {
             .thenWaitUntil(
                 "Adapter exposes the machine",
                 OC_JOIN_TIMEOUT_TICKS,
-                () -> { st.adapterComponent = snapshotComponent(helper, (Environment) oldAdapter); })
+                () -> {
+                    st.adapterComponent = OcComponents.adapterSnapshotComponent(helper, (Environment) oldAdapter);
+                })
             .thenExecute("unload", () -> {
                 st.before = Snapshots.probe(helper, MACHINE, "reload#1 before unload");
                 Snapshots.assertStatus(helper, st.before, "idle", "none");
@@ -154,7 +161,9 @@ public class ChunkReloadTests {
 
                 ManagedEnvironment fresh = OcComponents.adapterEnvironment(helper, MACHINE);
                 assertSnapshotOf(helper, "fresh environment after reload", fresh, after);
-                assertUnavailable(helper, "old environment after reload", st.env);
+                // The environment is bound to the position, not the tile: one created before the unload reads the
+                // reloaded machine.
+                assertSnapshotOf(helper, "old environment after reload", st.env, after);
                 helper.assertNull(PROBE.snapshot((TileEntity) oldHolder), "probe snapshot of the old holder");
                 helper.assertTrue(holder.canAccessData(), "reloaded holder cannot access data");
                 st.after = after;
@@ -162,7 +171,7 @@ public class ChunkReloadTests {
             .thenWaitUntil("reloaded Adapter joined and exposes the machine", OC_JOIN_TIMEOUT_TICKS, () -> {
                 TileEntity adapter = helper.assertTileEntityPresent(ADAPTER);
                 helper.assertNotSame(oldAdapter, adapter, "Adapter tile entity object after reload");
-                st.newAdapterComponent = snapshotComponent(helper, (Environment) adapter);
+                st.newAdapterComponent = OcComponents.adapterSnapshotComponent(helper, (Environment) adapter);
             })
             .thenExecute("reloaded Adapter component", () -> {
                 long ticks = helper.getWorld()
@@ -181,7 +190,13 @@ public class ChunkReloadTests {
                     "reloaded Adapter component",
                     OcComponents.invoke(helper, st.newAdapterComponent, "getSnapshot"),
                     st.after);
-                assertUnavailable(helper, "old Adapter component after reload", st.adapterComponent);
+                // The unloaded Adapter's component object is no longer connected to any Adapter (no computer reaches
+                // it), but its position-bound GregScope environment still reads the machine if called from Java.
+                assertSnapshot(
+                    helper,
+                    "old Adapter component after reload (Java call)",
+                    OcComponents.invoke(helper, st.adapterComponent, "getSnapshot"),
+                    st.after);
             })
             .thenSucceed();
     }
@@ -235,7 +250,8 @@ public class ChunkReloadTests {
 
                 ManagedEnvironment fresh = OcComponents.adapterEnvironment(helper, EBF_CONTROLLER);
                 assertSnapshotOf(helper, "fresh environment after reload", fresh, after);
-                assertUnavailable(helper, "old environment after reload", st.env);
+                // Position-bound: the environment created before the unload reads the reloaded controller.
+                assertSnapshotOf(helper, "old environment after reload", st.env, after);
                 st.freshEnv = fresh;
             })
             // One real server tick with the reloaded chunk, as after a real load; the warps below add 50 + 70 ticks.
@@ -400,6 +416,139 @@ public class ChunkReloadTests {
             .thenSucceed();
     }
 
+    /** Empty 17 x 1 x 5 template: any 17 consecutive x coordinates contain a chunk border. */
+    private static final String WIDE_TEMPLATE = "gregscope:empty_17x1x5";
+    private static final int WIDE_ROW_Z = 2;
+    private static final long CROSS_CHUNK_EU = 64;
+
+    /**
+     * Adapter and machine on opposite sides of a chunk border; only the machine's chunk unloads and reloads while the
+     * Adapter's chunk (and so the Adapter, its network and its cached merged component) stays loaded. Calls go through
+     * the merged component of the real placed Adapter.
+     */
+    @GameTest(template = WIDE_TEMPLATE, batch = "gregscope.reload.crosschunk", timeoutTicks = 100)
+    public static void adapterInOtherChunkSeesMachineAfterItsChunkReloads(GameTestHelper helper) {
+        // First x >= origin + 1 on a chunk border: the machine is the last block of one chunk, the Adapter the first
+        // of the next. Both are inside the 17-wide cell.
+        int borderX = ((helper.getOriginX() >> 4) + 1) << 4;
+        TestPos machine = at(borderX - 1 - helper.getOriginX(), 0, WIDE_ROW_Z);
+        TestPos adapterPos = at(borderX - helper.getOriginX(), 0, WIDE_ROW_Z);
+        helper.assertNotEquals(
+            (long) (helper.absolute(machine)
+                .x() >> 4),
+            (long) (helper.absolute(adapterPos)
+                .x() >> 4),
+            "machine and Adapter must be in different chunks");
+
+        IGregTechTileEntity oldHolder = GtPlacement.placeMachine(helper, machine, ItemList.Machine_LV_Macerator.get(1));
+        helper.assertTrue(oldHolder.increaseStoredEnergyUnits(CROSS_CHUNK_EU, true), "could not charge the machine");
+        TileEntity adapter = OcComponents.placeBlock(helper, adapterPos, "adapter");
+        Network.joinOrCreateNetwork(adapter);
+        ChunkReload chunks = ChunkReload.ofChunkAt(helper, machine);
+        State st = new State();
+
+        helper.startSequence()
+            .thenWaitUntil(
+                "Adapter exposes the machine",
+                OC_JOIN_TIMEOUT_TICKS,
+                () -> { st.adapterComponent = OcComponents.adapterSnapshotComponent(helper, (Environment) adapter); })
+            .thenExecute("unload the machine's chunk only", () -> {
+                st.before = Snapshots.probe(helper, machine, "crosschunk before unload");
+                assertSnapshot(
+                    helper,
+                    "crosschunk Adapter component before unload",
+                    OcComponents.invoke(helper, st.adapterComponent, "getSnapshot"),
+                    st.before);
+                helper.assertEquals(
+                    CROSS_CHUNK_EU,
+                    OcComponents.asLong(
+                        helper,
+                        logStoredEu(helper, "crosschunk OC getStoredEU before unload", st.adapterComponent),
+                        "getStoredEU"),
+                    "OC getStoredEU before unload");
+                st.address = st.adapterComponent.address();
+                st.startTick = helper.getWorld()
+                    .getTotalWorldTime();
+                st.startNanos = System.nanoTime();
+
+                chunks.unload();
+                helper.assertTrue(ChunkReload.isChunkLoaded(helper, adapterPos), "Adapter chunk unloaded too");
+                assertUnavailable(helper, "crosschunk Adapter component right after unload", st.adapterComponent);
+                helper.assertFalse(chunks.anyLoaded(), "getSnapshot loaded " + chunks + " again");
+            })
+            .thenIdle(1)
+            .thenExecute("unloaded, then reloaded", () -> {
+                assertOldMachineGone(helper, chunks, oldHolder);
+                assertUnavailable(helper, "crosschunk Adapter component while unloaded", st.adapterComponent);
+                // OC's energy environment reads the dead holder, which GT reports as 0; it does not load the chunk
+                // either.
+                helper.assertEquals(
+                    0L,
+                    OcComponents.asLong(
+                        helper,
+                        logStoredEu(helper, "crosschunk OC getStoredEU while unloaded", st.adapterComponent),
+                        "getStoredEU"),
+                    "OC getStoredEU while unloaded");
+                helper.assertFalse(chunks.anyLoaded(), "OC call loaded " + chunks + " again");
+                helper.assertTrue(ChunkReload.isChunkLoaded(helper, adapterPos), "Adapter chunk unloaded");
+                helper.assertSame(
+                    adapter,
+                    helper.assertTileEntityPresent(adapterPos),
+                    "Adapter tile entity object while the machine's chunk is unloaded");
+
+                chunks.reload();
+                assertReloadedMachine(helper, machine, oldHolder);
+                st.after = Snapshots.probe(helper, machine, "crosschunk after reload");
+                assertPersisted(helper, st.before, st.after);
+                // Same tick as the reload: the Adapter was not notified of anything and still holds the component it
+                // built before the unload, yet getSnapshot resolves the new tile entity at the position.
+                assertSnapshot(
+                    helper,
+                    "crosschunk Adapter component right after reload",
+                    OcComponents.invoke(helper, st.adapterComponent, "getSnapshot"),
+                    st.after);
+            })
+            .thenIdle(2)
+            .thenExecute("Adapter component after reload", () -> {
+                long ticks = helper.getWorld()
+                    .getTotalWorldTime() - st.startTick;
+                long ms = (System.nanoTime() - st.startNanos) / 1_000_000L;
+                System.out.println(
+                    "[GregScope gametest] crosschunk unload -> reload -> +2 ticks: " + ticks + " ticks, " + ms + " ms");
+                // Observed (with this and with the old tile-bound GregScope environment): OpenComputers never rebuilds
+                // the component, because the Adapter's chunk stayed loaded and no neighbour change reached it.
+                helper.assertSame(
+                    st.adapterComponent,
+                    OcComponents.adapterSnapshotComponent(helper, (Environment) adapter),
+                    "Adapter kept its merged component object across the machine's chunk reload");
+                helper.assertEquals(st.address, st.adapterComponent.address(), "component address");
+                assertSnapshot(
+                    helper,
+                    "crosschunk Adapter component 2 ticks after reload",
+                    OcComponents.invoke(helper, st.adapterComponent, "getSnapshot"),
+                    st.after);
+
+                // OpenComputers' own energy environment (not changed by GregScope) still holds the unloaded tile
+                // entity: getStoredEU on the same component reads the dead holder, which GT reports as 0, while the
+                // reloaded machine holds the charge.
+                long reloadedEu = helper.gtnh()
+                    .gtTile(machine)
+                    .getStoredEU();
+                Object ocEu = logStoredEu(helper, "crosschunk OC getStoredEU after reload", st.adapterComponent);
+                Snapshots.log("crosschunk GT getStoredEU of the reloaded tile", reloadedEu);
+                helper.assertEquals(CROSS_CHUNK_EU, reloadedEu, "reloaded machine's stored EU");
+                helper.assertEquals(0L, OcComponents.asLong(helper, ocEu, "getStoredEU"), "OC getStoredEU (stale)");
+            })
+            .thenSucceed();
+    }
+
+    private static Object logStoredEu(GameTestHelper helper, String label, Component component) {
+        Object[] result = OcComponents.invoke(helper, component, "getStoredEU");
+        Object value = result == null || result.length == 0 ? null : result[0];
+        Snapshots.log(label, value);
+        return value;
+    }
+
     /** Mutable values shared between sequence steps. */
     private static final class State {
 
@@ -435,25 +584,6 @@ public class ChunkReloadTests {
             holder.getMetaTileEntity(),
             "GT meta tile entity object after reload");
         return holder;
-    }
-
-    /**
-     * The merged component an Adapter built for the neighbouring machine. The per-driver nodes behind it (GregScope's
-     * with getSnapshot, OC's energy driver with getStoredEU) are reachable too, but only the merged one has both.
-     */
-    private static Component snapshotComponent(GameTestHelper helper, Environment adapter) {
-        Node node = adapter.node();
-        helper.assertTrue(node != null && node.network() != null, "Adapter node not in a network yet");
-        Component found = null;
-        for (Node reachable : node.reachableNodes()) {
-            if (reachable instanceof Component && ((Component) reachable).methods()
-                .containsAll(Arrays.asList("getSnapshot", "getStoredEU"))) {
-                helper.assertNull(found, "more than one merged component with getSnapshot on the Adapter");
-                found = (Component) reachable;
-            }
-        }
-        helper.assertNotNull(found, "Adapter exposes no merged component with getSnapshot yet");
-        return found;
     }
 
     private static void assertPersisted(GameTestHelper helper, Map<String, Object> before, Map<String, Object> after) {
@@ -499,10 +629,6 @@ public class ChunkReloadTests {
     }
 
     private static void assertUnavailable(GameTestHelper helper, String label, Component component) {
-        Object[] result = OcComponents.invoke(helper, component, "getSnapshot");
-        Snapshots.log("reload " + label, result == null ? null : Arrays.asList(result));
-        helper.assertTrue(result != null && result.length == 2, label + ": soft error result count");
-        helper.assertNull(result[0], label + ": soft error first value");
-        helper.assertEquals("machine unavailable", result[1], label + ": soft error message");
+        OcComponents.assertUnavailable(helper, "reload " + label, component);
     }
 }

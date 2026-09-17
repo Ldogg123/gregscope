@@ -1,5 +1,6 @@
 package io.github.ldogg123.gregscope.gametest;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -15,6 +16,7 @@ import li.cil.oc.api.Items;
 import li.cil.oc.api.detail.ItemInfo;
 import li.cil.oc.api.driver.SidedBlock;
 import li.cil.oc.api.network.Component;
+import li.cil.oc.api.network.Environment;
 import li.cil.oc.api.network.ManagedEnvironment;
 import li.cil.oc.api.network.Node;
 
@@ -44,6 +46,56 @@ final class OcComponents {
         World world = helper.getWorld();
         helper.assertTrue(world.setBlock(abs.x(), abs.y(), abs.z(), info.block(), 0, 3), "could not place " + name);
         return helper.assertTileEntityPresent(local);
+    }
+
+    /**
+     * The merged component a placed Adapter built for a neighbouring GT machine: the one reachable from the Adapter's
+     * node with both GregScope's {@code getSnapshot} and OC's {@code getStoredEU}. The per-driver nodes behind it are
+     * reachable too, but only the merged one has both. Fails if there is none (yet) or more than one.
+     */
+    static Component adapterSnapshotComponent(GameTestHelper helper, Environment adapter) {
+        Node node = adapter.node();
+        helper.assertTrue(node != null && node.network() != null, "Adapter node not in a network yet");
+        Component found = findAdapterSnapshotComponent(helper, adapter);
+        helper.assertNotNull(found, "Adapter exposes no merged component with getSnapshot");
+        return found;
+    }
+
+    /** Like {@link #adapterSnapshotComponent} but returns null if the Adapter currently exposes none. */
+    static Component findAdapterSnapshotComponent(GameTestHelper helper, Environment adapter) {
+        Node node = adapter.node();
+        if (node == null || node.network() == null) {
+            return null;
+        }
+        Component found = null;
+        for (Node reachable : node.reachableNodes()) {
+            if (reachable instanceof Component && ((Component) reachable).methods()
+                .containsAll(Arrays.asList("getSnapshot", "getStoredEU"))) {
+                helper.assertNull(found, "more than one merged component with getSnapshot on the Adapter");
+                found = (Component) reachable;
+            }
+        }
+        return found;
+    }
+
+    /** Asserts GregScope's soft error {@code nil, "machine unavailable"} and logs the raw result. */
+    static void assertUnavailable(GameTestHelper helper, String label, Component component) {
+        Object[] result = invoke(helper, component, "getSnapshot");
+        Snapshots.log(label, result == null ? null : Arrays.asList(result));
+        helper.assertTrue(result != null && result.length == 2, label + ": soft error result count");
+        helper.assertNull(result[0], label + ": soft error first value");
+        helper.assertEquals("machine unavailable", result[1], label + ": soft error message");
+    }
+
+    /** The snapshot map of a successful getSnapshot call; fails on a soft error. Logs the snapshot. */
+    static Map<String, Object> snapshot(GameTestHelper helper, String label, Component component) {
+        Object[] result = invoke(helper, component, "getSnapshot");
+        helper.assertTrue(
+            result != null && result.length == 1 && result[0] != null,
+            label + ": getSnapshot did not return a snapshot: " + (result == null ? null : Arrays.asList(result)));
+        Map<String, Object> s = asMap(helper, result[0]);
+        Snapshots.log(label, s);
+        return s;
     }
 
     static Component component(GameTestHelper helper, ManagedEnvironment env) {

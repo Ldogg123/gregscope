@@ -16,7 +16,11 @@ are only `Integer`, `Long`, `Double`, `Boolean`, `String` and an unmodifiable `L
 for humans only and must never be used for automation.
 
 The probe returns **no snapshot** (Java `null`) when the target is missing, unloaded, replaced, client-side or
-unsupported. The `unavailable` state and `machine_unavailable` status are reserved for a future hub.
+unsupported. `MachineProbe.snapshotAt(world, x, y, z)` looks up the tile entity at a position on every call and returns
+no snapshot if the world is client-side or that position's chunk is not loaded (it never loads the chunk). The
+OpenComputers component uses it, so it is bound to the position next to the Adapter rather than to one tile entity (see
+[OpenComputers → Position binding](opencomputers.md#position-binding)). The `unavailable` state and
+`machine_unavailable` status are reserved for a future hub.
 
 ## Always-present keys
 
@@ -135,7 +139,7 @@ Evaluated strictly in order; first match wins. `multi` = multiblock, `basic` = s
 | R8 | basic && steam vent blocked | output_blocked | `steam_vent_blocked` | GregScope | `MTEBasicMachineBronze.needsSteamVenting()` (MTEBasicMachineBronze.java:69). |
 | R9 | basic && outputBlockedTicks > 0 && maxProgress ≤ 0 | output_blocked | `item_output_full` | GregScope | Counter runs until all outputs are empty, even during a new recipe (MTEBasicMachine.java:672-673). |
 | R10 | multi && rid ∈ {`item_output_full`, `fluid_output_full`} | output_blocked | `rid` | result | GT recipe-check IDs (CheckRecipeResultRegistry.java:60,64). |
-| R11 | multi && !(successful \|\| rid ∈ {`none`, `no_recipe`}) | waiting | `rid` | result | Unknown/future failure IDs must surface as waiting. |
+| R11 | multi && !(successful \|\| rid ∈ {`none`, `no_recipe`}) | waiting | `rid` | result | Unknown/future failure IDs must surface as waiting. Verified in-game: an EBF whose recipe needs more heat than its coils give reports GT's `insufficient_heat` (ResultInsufficientHeat.java:27). |
 | R12 | multi | idle | `rid` | result | `no_recipe` is routine for empty inputs; success-typed ad-hoc IDs (e.g. `no_scrap`) are idle. |
 | R13 | basic | idle | `none` | GregScope | |
 

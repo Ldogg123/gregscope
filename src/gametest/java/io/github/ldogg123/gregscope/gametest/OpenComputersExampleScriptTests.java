@@ -106,10 +106,12 @@ public class OpenComputersExampleScriptTests {
     /**
      * Observed boot plus both script passes: 137-153 ticks locally, 157 ticks on GitHub CI. About 2x that, so a hung
      * computer fails fast. The two OpenOS batches below run one after the other, so a regression that hangs every
-     * computer costs both batch timeouts ({@link #OPENOS_BATCH_TIMEOUT_TICKS} each). Worst case for the whole gregscope
-     * suite if every batch hits its timeout: 100 + 200 + 100 + 450 + 450 + 100 + 200 + 200 = 1800 ticks (90 s at 20
-     * TPS), which leaves room for server boot (about 30 s on CI) inside CI's 300 s runServer budget, so a hang still
-     * yields a Horizon-QA report instead of a killed process.
+     * computer costs both batch timeouts ({@link #OPENOS_BATCH_TIMEOUT_TICKS} each). The worst case for the whole
+     * gregscope suite (every batch hitting its timeout) is kept in docs/testing.md, the single source for the CI
+     * budget;
+     * it must leave room for server boot (about 30 s on CI) inside CI's 300 s runServer budget, so a hang still yields
+     * a
+     * Horizon-QA report instead of a killed process. Update it there when adding a batch or changing a timeout.
      */
     private static final int BOOT_TIMEOUT_TICKS = 300;
     /** Network join ({@link #NETWORK_TIMEOUT_TICKS}) plus boot ({@link #BOOT_TIMEOUT_TICKS}) plus slack. */

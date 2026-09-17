@@ -34,6 +34,8 @@ configurations {
 
 dependencies {
     gametestCompileOnly(horizonQa)
+    // ChunkReload clears Hodgepodge's fresh-chunk unload protection through its public hook (beta-3 version).
+    gametestCompileOnly("com.github.GTNewHorizons:Hodgepodge:2.7.196:dev")
 }
 
 ["runServer", "runClient"].each { runTask ->
