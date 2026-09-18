@@ -29,6 +29,7 @@ import io.github.ldogg123.gregscope.history.NioFileStore;
 import io.github.ldogg123.gregscope.history.SizeCeilings;
 import io.github.ldogg123.gregscope.hub.HubViewLifecycle;
 import io.github.ldogg123.gregscope.hub.TelemetryHubs;
+import io.github.ldogg123.gregscope.recipe.GregScopeRecipes;
 import io.github.ldogg123.gregscope.registry.RegistryPersistence;
 import io.github.ldogg123.gregscope.registry.SensorRegistry;
 import io.github.ldogg123.gregscope.sampling.Clock;
@@ -206,7 +207,9 @@ public class GregScope {
     @Mod.EventHandler
     public void postInit(FMLPostInitializationEvent event) {
         phase = LifecyclePhase.POST_INIT;
-        // GS-117: add recipes here, never in loadComplete (GT clears its postload lists at the end of its postInit).
+        // GS-117 (design-v0.2 section 12.1): add recipes here, never in loadComplete (GT clears its postload lists at
+        // the end of its postInit).
+        GregScopeRecipes.install();
     }
 
     @Mod.EventHandler

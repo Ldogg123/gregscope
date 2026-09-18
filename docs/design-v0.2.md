@@ -2763,3 +2763,212 @@ in 40 classes** green, 0 failures, 0 skipped. Full `gregscope` Horizon-QA run on
 
 **Carry-overs.** The `/gregscope stats` half of surfacing `HistoryPersistence.sensorsAbandoned()` is still open
 (GS-111's surface; no command was touched here). The CI-step headroom issue is closed, see above.
+
+### GS-117 (2026-09-18)
+
+**Scope.** Section 12.1: both assembler recipes, registered in GregScope's `postInit` against
+`RecipeMaps.assemblerRecipes`, plus the in-game `RecipeTests`. One new shipped class,
+`recipe/GregScopeRecipes`, one new gametest class, `gametest/RecipeTests`, one line in `GregScope.postInit` and one
+entry in `ShippedClassesTest`'s expected-class list. Nothing else changed.
+
+**Everything section 12.1 names was verified against the pinned GT5U 5.09.54.133 sources before it was used.**
+
+- `ItemList.Cover_ActivityDetector`, `Sensor_MV`, `Hull_EV`, `Cover_Screen`, `Sensor_EV`, `Emitter_EV` and
+  `Tool_DataStick` all exist as enum constants (`gregtech/api/enums/ItemList.java`).
+- Errata E8 is right and its wording matters: `OrePrefixes.get(Object)` returns `name + material` for a non-`Materials`
+  argument but an `ItemData` for a `Materials`, and `GTOreDictUnificator.get(OrePrefixes, Object, ItemStack, long)`
+  resolves that through `sName2StackMap`. `MaterialsInit.loadMV()` builds the material with `setName("Good")` and
+  `loadEV()` with `setName("Data")` (`gregtech/loaders/materials/MaterialsInit.java`), so
+  `get(OrePrefixes.circuit, Materials.MV, 1L)` really is `circuitGood` and `Materials.EV` is `circuitData`. The
+  design's code is correct as written.
+- `TierEU.RECIPE_MV`/`RECIPE_EV` are `GTValues.VP[2]`/`VP[4]`, and `VP[i] = V[i] * 30 / 32` with `V = {8, 32, 128,
+  512, 2048, ...}`, i.e. **120** and **1920** (`TierEU.java:25-29`, `GTValues.java:92-109`). Negative control 2 below
+  re-confirms it from the running server.
+- `RecipeMaps.assemblerRecipes` is `.maxIO(9, 1, 1, 0)` (`RecipeMaps.java:1265-1275`), so nine item inputs is the
+  limit and the Hub recipe sits exactly on it.
+- `GTRecipeBuilder.circuit(n)` appends the programmed circuit to `inputsBasic` **after** `itemInputs` has run
+  (`applyPendingCircuit`), so the registered recipes have 5+1 and 8+1 item inputs, with the circuit last.
+- `SubstituteFluidStack.soldering(base)` puts `SolderingAlloy` first with multiplier 1 (it carries
+  `SOLDERING_MATERIAL_GOOD`), so the sensor's main fluid is 72 L of molten soldering alloy and the Hub's is 288 L.
+- `20 * SECONDS` = 400 and `1 * MINUTES` = 1200 (`GTRecipeBuilder.java:58-61`).
+
+**Correction to the acceptance criterion's wording, with evidence.** The AC says "no 'OreDict entry is empty' log".
+GT has no such string. The one line that exists is
+`GT_FML_LOGGER.error("Warning: OreDict entry \"{}\" is empty; recipe will be skipped.", ...)`, at
+`GTRecipeBuilder.java:394` and `:413`, and **both sites are inside `itemInputs(Object...)`** - the overload that takes
+OreDict *names*. Section 12.1's code uses `itemInputs(ItemStack...)`, with the OreDict lookups already done by
+`GTOreDictUnificator.get`, so GregScope's registration can never produce that line. What it *can* produce is the same
+failure without the line: `GTOreDictUnificator.get(Object, ItemStack, long, boolean, boolean)` ends in
+`GTUtility.copyAmount(aAmount, aReplacement)` with a null replacement, i.e. **null**, and `ItemList.get` returns null
+for an item GT never set; `itemInputs(ItemStack...)` then runs `ArrayExt.removeTrailingNulls` and the builder-only
+`GTRecipe` constructor keeps interior nulls verbatim, so the recipe is registered short an ingredient or with a hole.
+
+Two things follow, and both are implemented:
+
+1. `GregScopeRecipes` resolves every ingredient itself, names each one, records the ones that came back null in an
+   immutable `Report`, logs an ERROR naming them, and **does not register** a recipe whose inputs contain a null.
+   `RecipeTests.registrationResolvedEveryIngredient` asserts against that record, which is evidence from the one real
+   registration rather than from a re-run.
+2. The `LogCapture` assertion is scoped to a fresh re-resolution of the two ingredient lists, not to the whole log,
+   and it carries a positive control in the same test so it cannot pass vacuously: a second capture around
+   `GTValues.RA.stdBuilder().itemInputs(new OreDictItemStack("gregscopeNoSuchOreDictEntry", 1))` must see exactly one
+   line. That call is safe as a control because `itemInputs(Object...)` logs on its own and `addTo` is never reached,
+   so no recipe map is touched; the `IllegalArgumentException` GT's panic mode would raise afterwards is caught, and
+   the observed run has the line exactly once, after the empty-entry log. Scoping matters: the dev runtime emits
+   **14** of those lines on a clean boot, for `cropLemon`,
+   `cropTomato`, `cropCucumber`, `cropOnion`, `waxMagical`, `cropTea`, `cropGrape`, `cropChilipepper` and
+   `stoneAndesite` - GT recipes whose ore dicts belong to mods the dev pack does not have. A whole-log grep for that
+   message would fail on a perfectly healthy build. None of the 14 names a GregScope ingredient.
+
+**Deviation from section 13.2, recorded deliberately: the batch is `gregscope.surface.recipes`, not
+`gregscope.recipes`.** Horizon-QA lays batches out in sorted order, and the GS-109/GS-110 practice is that a new batch
+must sort **after** every existing one so no older test's cell moves. `gregscope.recipes` would sort between
+`gregscope.reload.*` and `gregscope.safety` and shift every later cell, including the chunk-reload batches whose
+tests compute chunk borders from their own position. The name is otherwise the section 13.2 one. The three tests are
+synchronous and place nothing, so the batch also carries `timeoutTicks = 20`, the `gregscope.surface.hubgui`
+precedent, instead of Horizon-QA's default 100.
+
+**A trap worth writing down: a synchronous Horizon-QA test still has to call `helper.succeed()`.** The first run of
+this ticket had all three tests **time out** after 100 ticks with their bodies fully executed and no assertion
+failing, because returning normally is not success. Every GregScope test class already did this; `RecipeTests` now
+does too.
+
+**Results.** `spotlessApply` + `clean build`: BUILD SUCCESSFUL, checkstyle and spotlessCheck clean, **620 unit tests
+in 40 classes**, 0 failures, 0 skipped (unchanged - GS-117 adds no unit test). Full `gregscope` Horizon-QA run on a
+freshly created world with `config/gregscope.cfg` moved away: **165 passed, 4 skipped** (`ProbeBenchmarkTests`,
+opt-in), 0 failed, 0 timed out, 0 infrastructure errors, status `PASSED`, exit code 0; the three new `RecipeTests`
+cases observe **0 ticks** each. Worst-case batch budget
+**6,150 ticks = 307.5 s over 41 batches** (6,130 over 40 plus this batch's 20). Release jar: **234 entries**, no test
+class, no `.lua`, no `tools/`, no gametest resource. An extra run with
+`-Dgt.recipebuilder.recipe_collision_check=true -Dgt.recipebuilder.debug.collision=true
+-Dgt.recipebuilder.debug.null=true` was also green with both recipes still added, which means `checkCollision` found
+none for either; the 1,780 collisions that run logs are GT's own and name no GregScope item. The real-pack collision
+run and the NEI look stay manual (GS-121).
+
+**Negative controls (two, each applied alone, each reverted and verified byte-identical with `cmp`).**
+
+1. `Materials.MV` replaced by `Materials.Infinity` in the sensor's circuit lookup, so `circuitGood` resolves to null -
+   the exact failure the AC forbids: **2 of 165** failed, `registrationResolvedEveryIngredient` ("ingredients that
+   resolved to null at registration time: [circuitGood]: expected <0> but found <1>") and `sensorRecipe` ("Machine
+   Sensor assembler recipes in RecipeMaps.assemblerRecipes: expected <1> but found <0>"). `hubRecipeIsEv` stayed
+   green, which is the discrimination that matters.
+2. The Hub registered at `TierEU.RECIPE_IV`: **1 of 165** failed, `hubRecipeIsEv` ("Telemetry Hub EU/t
+   (TierEU.RECIPE_EV): expected <1920> but found <7680>").
+
+**Carry-overs.** Unchanged from the previous ticket: the `/gregscope stats` half of surfacing
+`HistoryPersistence.sensorsAbandoned()` is still open (GS-111's surface).
+
+
+### GS-118 (2026-09-18)
+
+**Scope.** Section 16.2 and the section 14 acceptance criteria: the metrics model document plus the contract tests
+that keep the shipped data model able to satisfy it. Nothing shipped changed - GS-118 is one new document and two new
+unit test classes, and it found no violation in the model it was written to constrain.
+
+**`docs/metrics-model.md`.** The v0.4 exporter's contract, fixed now so v0.2's data model is not quietly built into a
+shape the exporter cannot use. It pins: what the exporter may read (the published `TelemetryFrame` and the ring
+accessors, nothing that touches the world); the identity rule (`sensor_id` is the sensor UUID, never a coordinate)
+and why every label's cardinality is bounded; the two Prometheus name regexes and the rules stacked on them; the
+closed label sets with the **code** each is generated from; and the global, common and per-kind family tables, each
+family naming the getter it reads.
+
+**The document is machine-checked, which is the part that makes it worth having.**
+`TelemetryFrameContractTest` parses the tables out of the markdown and asserts them against the code: every family
+name matches the metric regex, is owned by `gregscope_` and carries no colon; names are unique and no two collide
+once Prometheus' derived suffixes are applied; counters end in `_total` and gauges do not; every label matches the
+label regex, is not reserved (`__`-prefixed) and is not one of the forbidden identifiers; no `SnapshotKeys` name
+leaks in as a label; every per-sensor family carries `sensor_id`; **every closed set is regenerated from its enum and
+compared**, so adding a `MachineState` without updating the document fails; and every family's named source really is
+a method that exists on the class it names. Its anti-vacuity guards are explicit - a minimum row count per table, a
+minimum number of labels, calls and keys checked - because a reflection test that finds nothing otherwise passes.
+
+**The immutability half** walks the class graph reachable from `TelemetryFrame` through field types and no-argument
+getters, and asserts every field in it is final, that it holds no mutable static state, that every field type is
+immutable or copied out, that every collection a populated frame exposes is unmodifiable, and that array getters hand
+out fresh copies. The walk itself is guarded (`graph.size() >= 9`). `theFrameIsPublishedThroughAStaticVolatileField`
+reads `TelemetrySampler`'s class file as bytes rather than loading it, the way `ShippedClassesTest` does, so no
+Minecraft class is touched by a plain-JVM unit test.
+
+**`TelemetryFramePublicationTest`** is the concurrency half. A writer republishes while a reader validates: ten
+thousand published frames each checked for internal consistency; a free-running reader that must never see a torn or
+mutated frame; a frame held across a writer's rewrite of the entries it was built from, which must stay frozen; and
+the sensor list of every published frame unmodifiable.
+
+**Results.** `spotlessApply` + `build`: BUILD SUCCESSFUL, **644 unit tests in 42 classes** green (620 in 40 before;
+the 24 new ones are `TelemetryFrameContractTest`'s 20 and `TelemetryFramePublicationTest`'s 4). No in-game test and
+no shipped class was added, so the Horizon-QA totals and the worst-case batch budget are GS-117's unchanged.
+
+**Negative control.** `TelemetryFrame.sequence` made non-final - the mutability the exporter contract forbids:
+**1 of 20** contract tests failed, `everyFieldInTheFrameGraphIsFinal`, and nothing else. Reverted and verified
+identical to `HEAD` with `git diff --stat`.
+
+**Carry-over.** Unchanged: the `/gregscope stats` half of surfacing `HistoryPersistence.sensorsAbandoned()`.
+
+
+### GS-119 (2026-09-18)
+
+**Scope.** The API-shape and dedicated-server-safety guards of section 14, plus the dependency-bump checklist the AC
+asks the handoff to carry. One new gametest class, `gametest/GtApiShapeTests` (5 tests, batch `gregscope.api.shape`),
+a new section 18 in `docs/handoff.md`, and `tools/batch_budget.py` moved into the repo and fixed. **No shipped class
+changed**; this ticket is tests and documentation.
+
+**What a shape test is actually worth, which is narrower than the ticket implies.** Almost everything GregScope
+touches on GT, ModularUI2 and GTNHLib is checked by the compiler on every build: if a member GregScope overrides or
+calls is renamed or removed, `compileJava` fails and no test is needed. Asserting those members exist would restate
+the compiler. So `GtApiShapeTests` pins the three things a **green compile hides**:
+
+1. **A `lets*` method GT adds to `Cover`.** Section 1.4 promises a covered face stays transparent, and that promise is
+   kept by overriding *every* `lets*` and returning the permissive value. If a bump adds a ninth,
+   `MachineSensorCover` silently inherits GT's default, a covered face stops passing something, and nothing fails to
+   compile. `everyLetsMethodOnCoverIsOverriddenAndPermissive` reads the set off the **loaded** `Cover` class,
+   compares it with the eight pinned here, then requires each to be overridden (not inherited) and to answer true on
+   a sensor really attached to a machine.
+2. **A constant whose value changes.** `TierEU.RECIPE_MV`/`RECIPE_EV` are compile-time constants, so GS-117's recipes
+   carry the numbers GregScope was *built* against; only reading them from the loaded class shows a change.
+3. **A class that moves.** `gregtech.common.covers.Cover` is not an API class and carries no compatibility promise
+   (section 18's risk row), so its package is asserted explicitly.
+
+The remaining two tests pin the registration path (`CoverPlacer.builder().onlyPlaceIf`, `Textures.BlockIcons.custom`
+building safely on a dedicated server, `ICoverable.getCoverAtSide`/`hasCoverAtSide`) and the GTNHLib team API
+(`TeamManager.getTeamMap`, `Team.isMember/isOfficer/isOwner`). Each failure prints the declaring class and every
+overload of that name it did find, so a bump reports *what* changed.
+
+**An honest note on overlap, measured rather than assumed.** For the eight `lets*` methods that exist **today**, the
+behavioural transparency tests are stronger and already cover them: the negative control below (deleting the
+`letsFluidIn` override) fails `SensorCoverTests.transparentToFluids` as well, and that test moves real fluid through
+the covered face with GT's own code. The unique contribution of `GtApiShapeTests` is the **set comparison** - no
+behavioural test can notice a resource type GT invents, because no test exists for a method nobody has written yet.
+The bump checklist says so in those words rather than implying the shape test replaces the behavioural ones.
+
+**`SafetyTests` was left alone.** Section 14 asks for "the client-proxy marker and `buildUI` class loading". Both are
+already covered and re-verified rather than duplicated: `SafetyTests.clientProxyNotLoaded` asserts the marker
+property is unset and the injected proxy is `CommonProxy`, and `HubGuiServerTests.buildUiOnDedicatedServer` asserts
+FML's `SideTransformer` removed `createScreen` from the loaded class. Adding a third copy would only have made a
+later editor wonder which one was authoritative.
+
+**`tools/batch_budget.py`.** The batch-budget recount was a scratch script passed between tickets; it now lives in
+the repo with the CI step timeout written into it. Two real bugs were fixed while moving it. It bailed out on
+`HubExampleScriptTests`' qualified reference to `OpenOsComputer.BATCH_TIMEOUT_TICKS` (its `timeoutTicks` pattern
+excluded `.`), and the first attempt at fixing that by sharing one constant map across files was **wrong in a way
+worth recording**: nearly every holder declares its own `BATCH`, so a shared bare-name map let one file's value
+answer for every other file's tests and collapsed 42 batches into 16, reporting 165.5 s instead of 308.5 s. Only
+qualified `Class.NAME` constants are shared now. The tool also labels its count honestly: it counts `@GameTest`
+**methods** (157), while a `@MethodSource` method registers one test per argument, which is why the server runs 174.
+The budget itself is unaffected, because Horizon-QA starts every test of a batch together.
+
+**Results.** `spotlessApply` + `build`: BUILD SUCCESSFUL, **644 unit tests in 42 classes** green (unchanged; GS-119
+adds no unit test). Full `gregscope` Horizon-QA run on a fresh world: **170 passed, 4 skipped, 0 failed**, status
+PASSED, exit code 0. Worst-case batch budget **6,170 ticks = 308.5 s over 42 batches**, against the 600 s CI step -
+the new batch carries `timeoutTicks = 20` because all five tests are synchronous.
+
+**Negative controls (two, each reverted and verified identical to `HEAD`).**
+
+1. The `letsFluidIn` override deleted from `MachineSensorCover`: `everyLetsMethodOnCoverIsOverriddenAndPermissive`
+   failed with "MachineSensorCover does not override [letsFluidIn(net.minecraftforge.fluids.Fluid)]; it would inherit
+   GT's default, which is the silent transparency break this test exists to catch", and the other four shape tests
+   stayed green.
+2. The same mutation run against `SensorCoverTests`: `transparentToFluids` failed ("canFill through the covered
+   face"), **1 of 15**. This is the measurement behind the overlap note above - it was run precisely so the claim
+   about overlap would be a fact rather than a guess.
+
+**Carry-over.** Unchanged: the `/gregscope stats` half of surfacing `HistoryPersistence.sensorsAbandoned()`.

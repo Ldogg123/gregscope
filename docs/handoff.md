@@ -576,3 +576,38 @@ Then use a second session for GS-003. Separating the sessions makes it easier to
 
 - **Decision:** Prometheus reads immutable cached snapshots in a later release.  
   **Reason:** HTTP worker threads must never inspect Minecraft world state directly.
+
+
+---
+
+## 18. Dependency bump checklist (GS-119)
+
+GregScope pins GTNH **2.9.0-beta-3** (GT5U 5.09.54.133, OpenComputers 1.12.61-GTNH, GTNHLib 0.11.46, ModularUI2
+2.3.88-1.7.10) through constraints in `dependencies.gradle`. Most coupling is checked by the compiler, so a bump that
+renames or removes something GregScope calls fails `compileJava` and needs no ceremony. This checklist is for the
+breakages a **green compile hides**. Run it on every GT, ModularUI2 or GTNHLib bump.
+
+1. **Run `GtApiShapeTests`** (in-game, `gregscope.api.shape`):
+   `./gradlew runServer --mcJvmArgs=-Dhorizonqa.mode=ci --mcJvmArgs=-Dhorizonqa.tests=io.github.ldogg123.gregscope.gametest.GtApiShapeTests`
+   It fails loudly, with the old and new shape, on each of the following.
+2. **A `lets*` method GT added to `Cover`.** This is the one that matters most and the only one no other test can
+   catch. Design section 1.4 promises a covered face stays transparent, and that promise is kept by overriding
+   *every* `lets*` and returning true. A ninth one appearing means GregScope silently inherits GT's default and a
+   covered face stops passing something. `SensorCoverTests.transparentTo{Energy,Items,Fluids,Redstone}` prove the
+   behaviour for the four resource types that exist today - they would also catch an override being *deleted* - but
+   they cannot notice a resource type GT invents. **Fix:** override the new method, return the permissive value, add a
+   behavioural transparency test for it, then update `EXPECTED_LETS_METHODS`.
+3. **`gregtech.common.covers.Cover` moving package.** It is not an API class and carries no compatibility promise
+   (design section 18). All coupling to it is deliberately confined to `MachineSensorCover` and `SensorCovers`.
+4. **`TierEU.RECIPE_MV` / `RECIPE_EV` changing value.** These are compile-time constants, so GS-117's recipes carry
+   the numbers GregScope was *built* against; only reading them from the loaded class shows a change.
+5. **The GTNHLib team API.** `TeamManager.getTeamMap()` plus `Team.isMember/isOfficer/isOwner(UUID)`. Note the
+   standing decision **not** to use GTNHLib's by-player lookup, which logs an ERROR for a player with no team.
+6. **Re-read the ModularUI2 security assumption.** `TileTelemetryHub.buildUI` is the access authority *because* MUI2
+   registers `OpenGuiPacket` client-to-server and builds its `PosGuiData` from client-chosen coordinates. If a bump
+   changes that registration, re-read the reasoning in `buildUI`'s javadoc before trusting the older, weaker
+   right-click-only check. `HubGuiServerTests.strangerSeesNothingAndWritesNothing` and
+   `buildUiRefusesWhenTheViewCapIsFull` are the regression tests.
+7. **Then the full suites**: `./gradlew spotlessApply build` and the whole `gregscope` Horizon-QA selector on a fresh
+   world. The in-game tests are what prove GT still behaves as GregScope reads it; the unit tests cannot, because they
+   never load a GT class.

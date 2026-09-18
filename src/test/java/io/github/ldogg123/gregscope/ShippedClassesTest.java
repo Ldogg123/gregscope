@@ -127,6 +127,8 @@ class ShippedClassesTest {
         ROOT + "integration/opencomputers/HubDriver",
         ROOT + "integration/opencomputers/HubEnvironment",
         ROOT + "integration/opencomputers/HubScope",
+        // GS-117 assembler recipes: the one postInit registration class (design-v0.2 section 12.1).
+        ROOT + "recipe/GregScopeRecipes",
         ROOT + "probe/GregTechMachineProbe",
         ROOT + "probe/StateClassifier",
         ROOT + "model/MachineSnapshot");
