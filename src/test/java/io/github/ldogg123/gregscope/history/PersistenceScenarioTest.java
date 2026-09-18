@@ -67,6 +67,9 @@ class PersistenceScenarioTest {
     /** Enough drain/flush rounds for load -> create -> write to finish, whatever order the I/O thread answers in. */
     private static final int SETTLE_ROUNDS = 6;
 
+    /** Creates that throw before the test lets writes work again; below {@code MAX_FILE_FAILURES}, so nothing is abandoned. */
+    private static final int FAILING_CREATES = 3;
+
     private MemoryFileStore store;
     private HistoryIo io;
     private FakeClock clock;
@@ -430,12 +433,12 @@ class PersistenceScenarioTest {
     @Test
     void aCreateThatThrowsDoesNotLeaveTheSensorThinkingItHasAFile() {
         Run run = newRun();
-        store.failWrites.set(1);
+        // Every create throws while this phase lasts. How many are attempted depends on the I/O thread: a retry that
+        // finishes inside the same drain queues the next one straight away, which is correct either way.
+        store.failWrites.set(FAILING_CREATES);
         SensorEntry live = registerWithoutDrain(run);
-        // The absent load is applied, queues the create, and the create throws. Stop at the failure: the retry is only
-        // queued by the drain after it, so the file is still missing here.
-        awaitFileWork(run, () -> run.history.writesFailed() == 1, "the failed create was never reported");
-        assertEquals(1, run.history.filesCreated(), "the create was queued");
+        awaitFileWork(run, () -> run.history.writesFailed() > 0, "the failed create was never reported");
+        assertTrue(run.history.filesCreated() > 0, "the create was never queued");
         assertFalse(store.exists(SENSOR), "the create threw, so there is no file");
         assertFalse(run.history.filePresent(SENSOR), "the sensor must stop believing in the file");
 
@@ -443,10 +446,16 @@ class PersistenceScenarioTest {
         recordMinutes(run, live, 2);
         flush();
         assertEquals(0, run.history.slotsWritten(), "no slot may be written while there is no file");
+        assertFalse(store.exists(SENSOR), "still no file while every create throws");
 
-        // The retry reads (nothing), so a whole fresh image is written, minutes and all.
+        // Writes work again: the retry reads (nothing), so a whole fresh image is written, minutes and all.
+        store.failWrites.set(0);
+        long failedCreates = run.history.writesFailed();
         awaitFileWork(run, () -> store.exists(SENSOR), "the file was never recreated");
-        assertEquals(2, run.history.filesCreated(), "the second create is the one that landed");
+        assertEquals(
+            failedCreates + 1,
+            run.history.filesCreated(),
+            "every failed create plus the one that landed");
         assertEquals(
             HistoryFileCodec.Status.OK,
             HistoryFileCodec.inspect(store.history(SENSOR), SENSOR),
