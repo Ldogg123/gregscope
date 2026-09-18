@@ -12,6 +12,8 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.ForgeDirection;
+import net.minecraftforge.fluids.FluidRegistry;
+import net.minecraftforge.fluids.FluidStack;
 
 import com.gtnewhorizons.horizonqa.api.GameTestHelper;
 import com.gtnewhorizons.horizonqa.api.TestPos;
@@ -26,7 +28,9 @@ import gregtech.api.enums.TierEU;
 import gregtech.api.interfaces.tileentity.IGregTechTileEntity;
 import gregtech.api.metatileentity.implementations.MTEBasicMachine;
 import gregtech.api.metatileentity.implementations.MTEMultiBlockBase;
+import io.github.ldogg123.gregscope.buffers.BufferCollector;
 import io.github.ldogg123.gregscope.model.MachineSnapshot;
+import io.github.ldogg123.gregscope.probe.BufferProbe;
 import io.github.ldogg123.gregscope.probe.GregTechMachineProbe;
 import tectech.thing.CustomItemList;
 import tectech.thing.casing.TTCasingsContainer;
@@ -177,6 +181,54 @@ public class ProbeBenchmarkTests {
     }
 
     /** 1,000 warm-up calls, then 10,000 timed calls; logs and returns {p50, p99, max} in nanoseconds. */
+    /**
+     * GS-302's cost gate. The buffer walk runs on every sample for every LIVE machine, sharing the design-v0.2
+     * section 6.3 budget of 1 ms/tick, so its own cost has to be known rather than assumed. This times the walk
+     * alone, separate from the snapshot, because it is the part that scales with how many hatches a player bolted
+     * on.
+     */
+    @GameTest(template = ElectricBlastFurnaceSnapshotTests.TEMPLATE, timeoutTicks = 200, batch = BATCH)
+    public static void bufferWalkOnAFormedEbf(GameTestHelper helper) {
+        requireBenchEnabled(helper);
+        Multiblock ebf = helper.gtnh()
+            .withWarpRange(MULTI_WARP_RANGE)
+            .multiblock(EBF_CONTROLLER);
+        ebf.fixMaintenance();
+        ebf.assertFormed();
+        ebf.inputHatch(0)
+            .fill(new FluidStack(FluidRegistry.WATER, 4000));
+        ebf.inputBus(0)
+            .insert(new ItemStack(Blocks.cobblestone, 64));
+
+        MTEMultiBlockBase controller = helper.gtnh()
+            .multiBlockController(EBF_CONTROLLER);
+        BufferCollector collector = new BufferCollector();
+        for (int i = 0; i < WARMUP_CALLS; i++) {
+            BufferProbe.readMultiInputs(controller, collector);
+        }
+        long[] nanos = new long[TIMED_CALLS];
+        for (int i = 0; i < TIMED_CALLS; i++) {
+            long start = System.nanoTime();
+            BufferProbe.readMultiInputs(controller, collector);
+            nanos[i] = System.nanoTime() - start;
+        }
+        Arrays.sort(nanos);
+        long p50 = percentile(nanos, 50);
+        long p99 = percentile(nanos, 99);
+        System.out.println(
+            String.format(
+                Locale.ROOT,
+                "[GregScope bench] bufferWalkOnAFormedEbf: calls=%d p50=%.1f us p99=%.1f us max=%.1f us",
+                Integer.valueOf(TIMED_CALLS),
+                Double.valueOf(p50 / 1000.0),
+                Double.valueOf(p99 / 1000.0),
+                Double.valueOf(nanos[nanos.length - 1] / 1000.0)));
+        helper.assertTrue(
+            p99 < 1_000_000L,
+            "the buffer walk alone spent p99=" + p99 + " ns, which is the whole 1 ms tick budget");
+        helper.succeed();
+    }
+
     static long[] benchmark(GameTestHelper helper, String scenario, TileEntity tile) {
         MachineSnapshot last = null;
         for (int i = 0; i < WARMUP_CALLS; i++) {

@@ -62,6 +62,10 @@ class PureSourcesTest {
 
     /** GS-103 and GS-104 scope (§14) plus pure support classes; each must exist and be marked [pure]. */
     private static final List<String> PURE_CLASSES = Arrays.asList(
+        // GS-301: the buffer model is pure so its rules are testable without Minecraft.
+        "buffers/BufferReading.java",
+        "buffers/BufferSet.java",
+        "buffers/BufferCollector.java",
         "model/StateCodes.java",
         // v0.1 enum that StateCodes maps; found by the bytecode check (a same-package reference has no import).
         "model/MachineState.java",

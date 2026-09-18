@@ -42,6 +42,10 @@ class ShippedClassesTest {
     private static final String ROOT = "io/github/ldogg123/gregscope/";
     /** Classes that must be found, so an empty or wrong scan root cannot pass silently. */
     private static final List<String> EXPECTED = Arrays.asList(
+        // GS-301.
+        ROOT + "buffers/BufferReading",
+        ROOT + "buffers/BufferSet",
+        ROOT + "buffers/BufferCollector",
         ROOT + "GregScope",
         ROOT + "CommonProxy",
         ROOT + "ClientProxy",
