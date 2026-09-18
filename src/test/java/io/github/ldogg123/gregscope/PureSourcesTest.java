@@ -62,6 +62,9 @@ class PureSourcesTest {
 
     /** GS-103 and GS-104 scope (§14) plus pure support classes; each must exist and be marked [pure]. */
     private static final List<String> PURE_CLASSES = Arrays.asList(
+        // GS-202 spike: the fluid counting core is pure so its rules can be tested without Minecraft.
+        "flow/FluidMover.java",
+        "flow/FluidParcel.java",
         "model/StateCodes.java",
         // v0.1 enum that StateCodes maps; found by the bytecode check (a same-package reference has no import).
         "model/MachineState.java",
