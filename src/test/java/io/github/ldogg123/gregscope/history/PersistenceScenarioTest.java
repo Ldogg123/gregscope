@@ -67,7 +67,7 @@ class PersistenceScenarioTest {
     /** Enough drain/flush rounds for load -> create -> write to finish, whatever order the I/O thread answers in. */
     private static final int SETTLE_ROUNDS = 6;
 
-    /** Creates that throw before the test lets writes work again; below {@code MAX_FILE_FAILURES}, so nothing is abandoned. */
+    /** Creates that throw before writes work again; under MAX_FILE_FAILURES, so nothing is abandoned. */
     private static final int FAILING_CREATES = 3;
 
     private MemoryFileStore store;
