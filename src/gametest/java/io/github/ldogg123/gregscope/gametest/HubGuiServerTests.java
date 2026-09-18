@@ -102,6 +102,12 @@ public class HubGuiServerTests {
      */
     private static final int SYNCHRONOUS = 20;
 
+    /**
+     * Characters a {@link HubPanel#WIDTH}-wide panel fits on one default-font line. Minecraft's font advances 6 px
+     * for most ASCII, and the panel loses 6 px of padding on each side, so 248 / 6 rounds down to 41.
+     */
+    private static final int DETAIL_LINE_CHARS = 41;
+
     private HubGuiServerTests() {}
 
     @AfterBatch(BATCH)
@@ -1134,4 +1140,87 @@ public class HubGuiServerTests {
     private static String tail(TestPos pos) {
         return String.format("%012x", (pos.x() * 100 + pos.z()) & 0xffff);
     }
+
+    /**
+     * GS-121 regression: a detail line must fit the panel, not merely be correct.
+     *
+     * <p>
+     * A real client showed the detail block drawing "text over text". The model was right and the string was simply
+     * too long: ModularUI2's text widget wraps at the panel width, but the lines pinned themselves to one line's
+     * height, so the wrapped remainder drew on top of the next line. Nothing server-side could see it, because every
+     * value in the string was correct. This asserts the thing that was actually wrong - the WIDTH - with the label
+     * pushed to the longest a player can really set.
+     */
+    @GameTest(batch = BATCH, timeoutTicks = SYNCHRONOUS)
+    public static void detailLinesFitThePanel(GameTestHelper helper) {
+        UUID owner = teamlessOwner("hubGuiFit");
+        emptyRegistry(helper);
+        UUID id = liveSensor(helper, MACHINE, "0d24", owner, "hubGuiFit");
+        publish(helper);
+        Ui ui = openWithSession(helper, owner, "hubGuiFit");
+
+        // The longest label Labels.sanitize will keep, which is what a player can really put on a sensor.
+        StringBuilder wide = new StringBuilder();
+        while (wide.length() < Labels.MAX_CODE_POINTS) {
+            wide.append('W');
+        }
+        sendInt(ui.intHandler(helper, HubPanel.SYNC_SELECT), 0);
+        sendString(ui.stringHandler(helper, HubPanel.SYNC_LABEL), wide.toString());
+        publish(helper);
+        sendInt(ui.intHandler(helper, HubPanel.SYNC_SELECT), 0);
+
+        // Without this the width assertions below would pass on an empty detail, which is how the first version of
+        // this test passed against the very bug it was written for.
+        helper.assertTrue(
+            ui.session.detail()
+                .isPresent(),
+            "nothing was selected, so the lines below are empty");
+        helper.assertEquals(
+            id,
+            ui.session.detail()
+                .id(),
+            "row 0 did not resolve to the fixture sensor");
+        helper.assertEquals(
+            Labels.MAX_CODE_POINTS,
+            ui.session.detail()
+                .displayName()
+                .length(),
+            "the wide label did not reach the detail, so this is not the worst case");
+
+        String identityLine = HubPanel.detailIdentity(ui.session);
+        String atLine = HubPanel.detailAt(ui.session);
+        String stateLine = HubPanel.detailState(ui.session);
+        helper.assertTrue(
+            identityLine.length() <= DETAIL_LINE_CHARS,
+            "the identity line is " + identityLine.length()
+                + " characters, past the "
+                + DETAIL_LINE_CHARS
+                + " a "
+                + HubPanel.WIDTH
+                + "px panel fits, so it wraps and draws over the next line: "
+                + identityLine);
+        helper.assertTrue(
+            stateLine.length() <= DETAIL_LINE_CHARS,
+            "the state line is " + stateLine.length()
+                + " characters, past the "
+                + DETAIL_LINE_CHARS
+                + " a "
+                + HubPanel.WIDTH
+                + "px panel fits, so it wraps and draws over the next line: "
+                + stateLine);
+        helper.assertTrue(
+            atLine.length() <= DETAIL_LINE_CHARS,
+            "the location line is " + atLine.length()
+                + " characters, past the "
+                + DETAIL_LINE_CHARS
+                + " a "
+                + HubPanel.WIDTH
+                + "px panel fits, so it wraps and draws over the next line: "
+                + atLine);
+        Snapshots.log(
+            "hubgui#fit",
+            "identity " + identityLine.length() + " / at " + atLine.length() + " / state " + stateLine.length());
+        helper.succeed();
+    }
+
 }

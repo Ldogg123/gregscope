@@ -22,17 +22,23 @@ face. You get a chat line telling you which rule refused.
 **A covered face keeps working.** The sensor lets items, fluids, EU and redstone through exactly as an uncovered
 face does, and the machine's GUI still opens through it. Pipes, cables and conveyors on that face are unaffected.
 
-> **One accepted side effect.** GT excludes *any* covered face from its rain checks, and that is what gates GT's
-> rain fire and thunderstorm explosions. A face carrying a sensor therefore no longer catches fire or explodes in a
-> storm. This is not something GregScope can opt out of - it is true of every GT cover, so a conveyor or a plate on
-> that face does the same - and it grants you nothing you could not already do. It is listed here because it is a
-> real behaviour change, not because it is a way to cheat.
+> **One small side effect, smaller than it first looks.** GT's `isRainExposed()` tests five faces - UP and the four
+> horizontals - and a machine counts as exposed if **any** of them is uncovered and open to the sky. A cover removes
+> only its own face from that test. So a sensor does **not** make a machine weatherproof: put one on a Macerator
+> standing in the open and it still catches fire and explodes in a thunderstorm, because the top and the other three
+> sides are still exposed. The only case where it changes anything is a machine down to its last exposed face, and
+> then it is identical to putting any other GT cover there - a conveyor or a plate does the same. Nothing GregScope
+> can opt out of, and nothing you could not already do.
 
 **Identity.** Each sensor gets a UUID when it is placed, stored in the cover's own NBT. That id is what
 `/gregscope` prints, what the Hub selects on and what OpenComputers returns. Because it lives in the cover:
 
-- Breaking the machine and putting it back **keeps** the sensor's identity and history.
-- Picking the cover up and placing it on a different machine keeps the **id** and rebinds it to the new machine.
+- **Breaking the machine** and putting it back keeps the sensor's identity and history: GT writes the cover into the
+  machine's drop, so the id travels inside the dropped item.
+- **Taking the cover off with a crowbar or a screwdriver does not.** GT drops a plain Machine Sensor with no data on
+  it, so placing that item again starts a *new* sensor with a new id, and the old one becomes a tombstone whose
+  history is kept for `history.removedRetentionHours`. This is deliberate: a cover you detach is a blank part again,
+  not a container of someone else's history.
 - The id survives a server restart, a chunk unload and a world backup.
 
 **Labels.** Name a sensor so you can find it: rename the *item* in an anvil before placing it, use

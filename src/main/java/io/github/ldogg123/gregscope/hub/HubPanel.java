@@ -68,6 +68,23 @@ public final class HubPanel {
     private static final int ROW_HEIGHT = 11;
     private static final int LINE_HEIGHT = 9;
 
+    /**
+     * Character budgets for the two detail lines that carry a field with no useful bound of its own: the display
+     * name (capped at 40 by the codec) and the status text (capped at 128).
+     *
+     * <p>
+     * GS-121 found the bug these exist to stop. A {@link #WIDTH}-wide panel fits roughly 42 default-font characters
+     * on a line, and ModularUI2's text widget <b>wraps</b> at the available width - but these lines were built with
+     * {@code .height(LINE_HEIGHT)}, which pins the box to one line's worth of space. A wrapped second line therefore
+     * drew on top of the next widget instead of pushing it down, which is the "text over text" a real client showed
+     * and no server-side test could: the model produced the right string, and the string was simply too long to
+     * draw. Capping the two unbounded fields keeps the line within the panel, and the lines no longer force their
+     * own height, so anything that still wraps takes real space rather than overlapping.
+     */
+    private static final int DETAIL_NAME_CHARS = 30;
+
+    private static final int DETAIL_STATUS_CHARS = 10;
+
     private HubPanel() {}
 
     /**
@@ -233,37 +250,34 @@ public final class HubPanel {
         lines.child(
             IKey.dynamic(() -> detailIdentity(session))
                 .asWidget()
-                .height(LINE_HEIGHT)
+                .fullWidth());
+        lines.child(
+            IKey.dynamic(() -> detailAt(session))
+                .asWidget()
                 .fullWidth());
         lines.child(
             IKey.dynamic(() -> detailState(session))
                 .asWidget()
-                .height(LINE_HEIGHT)
                 .fullWidth());
         lines.child(
             IKey.dynamic(() -> detailEnergy(session))
                 .asWidget()
-                .height(LINE_HEIGHT)
                 .fullWidth());
         lines.child(
             IKey.dynamic(() -> windowLine(session, true))
                 .asWidget()
-                .height(LINE_HEIGHT)
                 .fullWidth());
         lines.child(
             IKey.dynamic(() -> windowLine(session, false))
                 .asWidget()
-                .height(LINE_HEIGHT)
                 .fullWidth());
         lines.child(
             IKey.dynamic(() -> stripLine(session))
                 .asWidget()
-                .height(LINE_HEIGHT)
                 .fullWidth());
         lines.child(
             IKey.dynamic(() -> samplerLine(session))
                 .asWidget()
-                .height(LINE_HEIGHT)
                 .fullWidth());
         return lines;
     }
@@ -332,22 +346,37 @@ public final class HubPanel {
         return out.toString();
     }
 
-    static String detailIdentity(HubSession session) {
+    /**
+     * The identity line. Public so the in-game {@code HubGuiServerTests} can assert it stays inside the panel: the
+     * GS-121 overlap bug was a string that was correct and too long, which only a width assertion catches.
+     */
+    public static String detailIdentity(HubSession session) {
         HubDetail detail = session.detail();
         if (!detail.isPresent()) {
             return local(GregScopeAssets.LANG_HUB_NO_SELECTION);
         }
         return format(
             GregScopeAssets.LANG_HUB_DETAIL_WHERE,
-            detail.displayName(),
-            SensorKind.label(detail.kind()),
+            HubCodecs.cap(detail.displayName(), DETAIL_NAME_CHARS),
+            SensorKind.label(detail.kind()));
+    }
+
+    /** The location line, split off from the identity so neither half wraps. Public for the width assertion. */
+    public static String detailAt(HubSession session) {
+        HubDetail detail = session.detail();
+        if (!detail.isPresent()) {
+            return "";
+        }
+        return format(
+            GregScopeAssets.LANG_HUB_DETAIL_AT,
             Integer.valueOf(detail.dim()),
             detail.x() + "," + detail.y() + "," + detail.z(),
             Integer.valueOf(detail.side()),
             Labels.shortId(detail.id()));
     }
 
-    static String detailState(HubSession session) {
+    /** The state line; public for the same width assertion as {@link #detailIdentity}. */
+    public static String detailState(HubSession session) {
         HubDetail detail = session.detail();
         if (!detail.isPresent()) {
             return "";
@@ -356,8 +385,10 @@ public final class HubPanel {
         return format(
             GregScopeAssets.LANG_HUB_DETAIL_STATE,
             local(GregScopeAssets.stateKey(StateCodes.id(detail.stateCode()))),
-            detail.statusText()
-                .isEmpty() ? detail.statusId() : detail.statusText(),
+            HubCodecs.cap(
+                detail.statusText()
+                    .isEmpty() ? detail.statusId() : detail.statusText(),
+                DETAIL_STATUS_CHARS),
             progress,
             detail.maintenanceIssues() < 0 ? "-" : Integer.toString(detail.maintenanceIssues()),
             age(detail.sampleAgeSeconds()));

@@ -1272,28 +1272,52 @@ mods loaded.
 > They do **not** prove that a sensor's identity, label or 24 h of history survive a restart - that is manual row M7
 > below, and it is not ticked.
 
-### Manual: client-side checklist - NOT PERFORMED
+### Manual: client-side checklist - PERFORMED 2026-09-18
 
-Run these on a client connected to a dedicated server, then once against `gregscope-server/pack`. Record the date,
-the pack version and the result in the Result column. **Do not tick a row you did not perform.**
+Run by the user on a real client against GTNH 2.9.0-beta-3, jar `gregscope-58507c1.jar`. **13 pass, 2 skipped, 0
+failed** - but two passes came with findings, and one row first read as a failure that turned out to be a false
+claim in this project's own documentation rather than a defect in the mod.
+
+**What the manual pass found that 648 unit tests and 171 in-game tests could not:**
+
+1. **A real GUI bug (M4).** The Hub's detail block drew "text over text" on a real client. The cause was not a wrong
+   value - every string the model produced was correct - it was that the identity line ran to **78 characters** in a
+   260 px panel. ModularUI2's text widget wraps at the available width, but those lines were built with
+   `.height(LINE_HEIGHT)`, which pins the box to one line, so the wrapped remainder drew on top of the next widget
+   instead of pushing it down. No server-side test could see it, because the defect was the **width**, not the
+   content. Fixed three ways: the detail lines no longer pin their own height, the identity line is split into a
+   name line and a location line, and the two fields with no useful bound of their own are capped.
+   `HubGuiServerTests.detailLinesFitThePanel` now pins the width with the longest label a player can set - and its
+   first version passed against the unfixed code, because it asserted on an empty detail; the anti-vacuity guard it
+   now carries is there for that reason.
+2. **Two false claims in this project's documentation**, both caught by a player doing the obvious thing:
+   - **M15.** The docs said a sensor stops its face catching fire, and called that an accepted side effect. A
+     Macerator with a sensor on it exploded anyway. `BaseMetaTileEntity.isRainExposed()` settles it: the method
+     **ORs five faces**, so covering one changes nothing unless it was the last exposed one. The mod was right and
+     the documentation was wrong; corrected in four files.
+   - **M3.** The docs said picking a cover up and replacing it keeps the sensor id. It does not: only breaking the
+     *machine* carries the id, because GT writes the cover into the machine's drop. A crowbar drops a blank sensor.
+     The user's instinct that this is the better behaviour is right, so the code stands and the docs were corrected.
+
+The two skips are honest skips, not silent passes: M5 needs a second account, and M11's two-hour soak was not run.
 
 | # | Check | What to expect | Date | Pack | Result |
 |---|---|---|---|---|---|
-| M1 | Place a sensor on a machine | The overlay renders on the covered face | | | |
-| M2 | Pipes, cables and conveyors on the covered face | All still work; the machine GUI still opens through the cover | | | |
-| M3 | Rename the sensor item in an anvil, then place it | The sensor carries that label | | | |
-| M4 | Open the Hub GUI | Opens; paging, the Problems filter, selection and label typing all work | | | |
-| M5 | Type a label as a player with no rename right | Refused, with the reason in chat | | | |
-| M6 | Unload a sensor's chunk, then look at its history | "loading history..." appears, then the gap is shown | | | |
-| M7 | Place a sensor, label it, run for a while, restart the server | The label and the history are still there, with a gap for the downtime | | | |
-| M8 | Connect a client with no GregScope, and one on a different version | Both refused at the handshake with a clear message | | | |
-| M9 | NEI | Both recipes appear and look right | | | |
-| M10 | Recipe collision run on the real pack | Clean; no GregScope item in any collision | | | |
-| M11 | After ~2 h of play, `/gregscope stats` | p99 <= 1 ms/tick and `ioDroppedTotal = 0` | | | |
-| M12 | Remove the mod from a **copy** of the world and load it | Loads after the FML prompt; machines intact; sensors gone | | | |
-| M13 | WAILA on a healthy sensor (GS-REV-1) | Reads "GregScope sensor", never the inert wording | | | |
-| M14 | A real player attaches a cover past the cap | The player is the owner, and the over-cap chat line appears | | | |
-| M15 | An outdoor machine with a sensor on an exposed face, in a thunderstorm (GS-REV-4) | It no longer catches fire or explodes - the accepted side effect, confirmed once | | | |
+| M1 | Place a sensor on a machine | The overlay renders on the covered face | 2026-09-18 | beta-3 | **pass** - renders correctly |
+| M2 | Pipes, cables and conveyors on the covered face | All still work; the machine GUI still opens through the cover | 2026-09-18 | beta-3 | **pass** |
+| M3 | Rename the sensor item in an anvil, then place it | The sensor carries that label | 2026-09-18 | beta-3 | **pass**, and it corrected the docs: a crowbar pickup drops a blank sensor, it does not carry the id |
+| M4 | Open the Hub GUI | Opens; paging, the Problems filter, selection and label typing all work | 2026-09-18 | beta-3 | **pass with a bug found** - GUI and relabel work, but the detail text drew over itself. Fixed; see below |
+| M5 | Type a label as a player with no rename right | Refused, with the reason in chat | - | - | *skipped* - needs a second account |
+| M6 | Unload a sensor's chunk, then look at its history | "loading history..." appears, then the gap is shown | 2026-09-18 | beta-3 | **pass** |
+| M7 | Place a sensor, label it, run for a while, restart the server | The label and the history are still there, with a gap for the downtime | 2026-09-18 | beta-3 | **pass** |
+| M8 | Connect a client with no GregScope, and one on a different version | Both refused at the handshake with a clear message | 2026-09-18 | beta-3 | **pass** |
+| M9 | NEI | Both recipes appear and look right | 2026-09-18 | beta-3 | **pass** |
+| M10 | Recipe collision run on the real pack | Clean; no GregScope item in any collision | 2026-09-18 | beta-3 | **pass** |
+| M11 | After ~2 h of play, `/gregscope stats` | p99 <= 1 ms/tick and `ioDroppedTotal = 0` | - | - | *skipped* |
+| M12 | Remove the mod from a **copy** of the world and load it | Loads after the FML prompt; machines intact; sensors gone | 2026-09-18 | beta-3 | **pass** |
+| M13 | WAILA on a healthy sensor (GS-REV-1) | Reads "GregScope sensor", never the inert wording | 2026-09-18 | beta-3 | **pass** - reads "machine sensor gregscope sensor" |
+| M14 | A real player attaches a cover past the cap | The player is the owner, and the over-cap chat line appears | 2026-09-18 | beta-3 | **pass** |
+| M15 | An outdoor machine with a sensor on an exposed face, in a thunderstorm (GS-REV-4) | A machine still open to the sky on any other face **still** burns and explodes; a cover only removes its own face from GT's five-face check | 2026-09-18 | beta-3 | **pass after the doc was corrected** - a Macerator with a cover still exploded, which is GT's real behaviour; the claim was wrong, not the mod |
 
 **Partly covered already, which is why these are the only manual rows left.** M8's logic is covered by
 `SafetyTests.handshakeRequiresMatchingClient`, which asks FML's own checker; what stays manual is a real connection.

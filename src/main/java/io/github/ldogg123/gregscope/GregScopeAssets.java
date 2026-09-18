@@ -89,6 +89,8 @@ public final class GregScopeAssets {
     public static final String LANG_HUB_LOADING = DOMAIN + ".hub.loading";
     /** The detail pane's identity line: name, kind, dimension, position, side, short id. */
     public static final String LANG_HUB_DETAIL_WHERE = DOMAIN + ".hub.detail.where";
+    /** GS-121: the location half of the identity, split off so neither half wraps in a 260px panel. */
+    public static final String LANG_HUB_DETAIL_AT = DOMAIN + ".hub.detail.at";
     /** The detail pane's state line: state, status, progress, maintenance, sample age. */
     public static final String LANG_HUB_DETAIL_STATE = DOMAIN + ".hub.detail.state";
     /** The detail pane's energy line: EU/t, stored, capacity. */

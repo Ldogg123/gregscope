@@ -92,7 +92,7 @@
 ### 1.4 v0.1 constraints: kept or deliberately lifted
 | v0.1 constraint | v0.2 | How it holds |
 |---|---|---|
-| Read-only, no machine control | **Kept, with one GT-wide exception** | Every `lets*` on the cover returns true. `isRedstoneSensitive` and `manipulatesSidedRedstoneOutput` return false. No synced actions. OC is read-only. The only writes are to GregScope's own data (label, purge). **Exception (GS-REV-4):** a covered side is excluded from `BaseMetaTileEntity.isRainExposed()` (`BaseMetaTileEntity.java:250-265`, which tests `hasCoverAtSide`; `Cover.isValid()` is `coverID != 0 && side != UNKNOWN`, so no cover can opt out), and that gates GT's rain fire and the rain/thunder explosions (`:506-550`, both on by default). A sensor on an exposed face therefore removes that face from GT's weather checks. This is not fixable in GregScope code and is identical for every GT cover (a conveyor or plate weatherproofs a face the same way), so it grants players no capability they do not already have; it is accepted for release and is on the GS-121 manual checklist. |
+| Read-only, no machine control | **Kept, with one GT-wide exception** | Every `lets*` on the cover returns true. `isRedstoneSensitive` and `manipulatesSidedRedstoneOutput` return false. No synced actions. OC is read-only. The only writes are to GregScope's own data (label, purge). **Exception (GS-REV-4):** a covered side is excluded from `BaseMetaTileEntity.isRainExposed()` (`BaseMetaTileEntity.java:250-265`, which tests `hasCoverAtSide`; `Cover.isValid()` is `coverID != 0 && side != UNKNOWN`, so no cover can opt out), and that gates GT's rain fire and the rain/thunder explosions (`:506-550`, both on by default). A sensor on an exposed face therefore removes **that face** from GT's weather checks - and no more: the method ORs five faces (UP and the four horizontals), so a machine open to the sky on any other face is still exposed and still burns. GS-121 confirmed this on a real client: a single-block Macerator with a sensor on one side still exploded, which is correct. This is not fixable in GregScope code and is identical for every GT cover (a conveyor or plate weatherproofs a face the same way), so it grants players no capability they do not already have; it is accepted for release and is on the GS-121 manual checklist. |
 | No mixins, ATs or reflection in shipped code | **Kept** | Only public APIs: GT `CoverRegistry`/`CoverPlacer`/`Cover`, MUI2, GTNHLib teams, OC, Forge. Reflection appears only in test code (GS-119). |
 | No world scans; never force-load chunks | **Kept** | Lookups go `DimensionManager.getWorld` → `blockExists` → `getTileEntity`, and never call `worldServerForDimension`. Housekeeping walks the registry only. |
 | Bounded memory | **Kept** | Hard caps, fixed rings, capped strings, a bounded I/O queue. |
@@ -1005,7 +1005,8 @@ Sizes: S ≤0.5 d, M 1-2 d, L ≈3 d. Every ticket ends with `./gradlew build` g
   - Review follow-ups: the WAILA tooltip of a healthy sensor reads "GregScope sensor", never the inert
     wording (GS-REV-1); a real player attaching a cover gets the player as owner and, over the cap, the chat
     line; and the accepted GS-REV-4 side effect is confirmed once - an outdoor machine whose exposed face
-    carries a sensor no longer catches fire or explodes in a thunderstorm, exactly as it would with any other
+    carries a sensor behaves exactly as it would with any other GT cover on that face - which, because
+    isRainExposed() ORs five faces, means it still burns unless every exposed face is covered;
     GT cover on that face.
 - **AC:** every item recorded with date and pack version in `docs/testing.md`.
 
@@ -3084,3 +3085,50 @@ checklist.
 **v0.2.0 definition of done.** Every criterion in the handoff's new v0.2 list is met except the last, which reads
 "the GS-121 manual client checklist is signed off by a human". That one is the user's, and it is the only thing
 between v0.2 and a release.
+
+
+### GS-121 signoff and the three findings (2026-09-18)
+
+The manual checklist was run by the user on a real client: **13 pass, 2 skip, 0 fail**. It earned its place three
+times over, and every one of the three findings was invisible to the 648 unit tests and 171 in-game tests.
+
+**1. A real GUI bug (M4), now fixed.** The Hub's detail block drew "text over text". The defect was not a wrong
+value - the view model produced exactly the right string - it was the **width**: the identity line reached 78
+characters in a 260 px panel. ModularUI2's text widget wraps at the available width, but `detailLines` pinned each
+line with `.height(LINE_HEIGHT)`, so the wrapped remainder drew on top of the next widget instead of pushing it
+down. Three changes: the detail lines no longer pin their own height (anything that still wraps now takes real
+space); the identity line is split into `detail.where` (name and kind) and a new `detail.at` (dim, coordinates,
+side, short id); and the two fields with no useful bound - display name and status text - are capped for display.
+
+*The test for it was vacuous first, which is worth recording.* `detailLinesFitThePanel` passed against the unfixed
+code, because it selected a row that did not exist and asserted on an empty detail. It now asserts
+`detail().isPresent()`, the resolved sensor id and that the wide label really reached the detail **before** it
+measures anything. Against the unfixed code it fails with "the identity line is 78 characters, past the 41 a 260px
+panel fits"; against the fix the three lines measure 39, 25 and 23.
+
+**2. GS-REV-4 was documented wrongly (M15).** The claim was that a sensor stops its face catching fire in a
+thunderstorm, recorded as an accepted side effect. The user put a sensor on a Macerator and it exploded anyway.
+`BaseMetaTileEntity.isRainExposed()` (`:250-264`) is the answer: it **ORs five faces** - UP and the four
+horizontals - so covering one removes only that term. A machine open to the sky anywhere else is still exposed and
+still burns. The mod behaved correctly the whole time; the documentation overstated the effect, in section 1.4,
+section 14's GS-121 list, the player guide and the release notes. All four are corrected. The narrow truth is that
+a sensor matters only on a machine down to its last exposed face, where it is identical to any other GT cover.
+
+**3. The identity-on-pickup claim was wrong (M3).** `sensors-and-hub.md` said picking the cover up and placing it
+elsewhere keeps the sensor id. It does not, and the two paths are genuinely different: `onBaseTEDestroyed` fires
+when the **machine** is broken and GT writes the cover into the machine's drop, so the id travels in the item
+(`IN_ITEM`); `onCoverRemoval` fires for a crowbar or screwdriver and GT drops a plain Machine Sensor with no data
+(`DETACHED`), so replacing it starts a new sensor. The user noticed and added "that may be intentional, and actually
+probably best" - which is right, a detached cover is a blank part again - so the behaviour stands and the
+documentation was corrected to match it.
+
+**What this says about the test suite.** All three were width, wording or a path no automated test exercises,
+and none of them was a logic error. That is the shape of what manual testing is for, and it is the argument for
+keeping the GS-121 checklist rather than trying to automate it away.
+
+**Results after the fixes.** `spotlessApply` + `build`: BUILD SUCCESSFUL, **648 unit tests in 43 classes** green.
+Full `gregscope` Horizon-QA run on a fresh world: **171 passed** (170 before; the new one is
+`detailLinesFitThePanel`), 4 skipped, 0 failed.
+
+**Still open, and the user's to close:** M5 (needs a second account) and M11 (the two-hour soak). Both are honest
+skips. The v0.2.0 definition of done is otherwise met.
