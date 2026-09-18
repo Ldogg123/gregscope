@@ -4,14 +4,14 @@ import java.util.List;
 
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraftforge.common.util.ForgeDirection;
 import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.fluids.FluidTankInfo;
 
 import gregtech.api.metatileentity.implementations.MTEBasicMachine;
 import gregtech.api.metatileentity.implementations.MTEHatch;
-import gregtech.api.metatileentity.implementations.MTEHatchInput;
 import gregtech.api.metatileentity.implementations.MTEHatchInputBus;
-import gregtech.api.metatileentity.implementations.MTEHatchOutput;
 import gregtech.api.metatileentity.implementations.MTEHatchOutputBus;
 import gregtech.api.metatileentity.implementations.MTEMultiBlockBase;
 import io.github.ldogg123.gregscope.buffers.BufferCollector;
@@ -31,11 +31,18 @@ import io.github.ldogg123.gregscope.buffers.BufferSet;
  * ({@code MTEMultiBlockBase.java:229-232}) and reads each one through getters that only read.
  *
  * <p>
- * <b>ME hatches report a flag, never a number.</b> GT's own javadoc on {@code getStoredFluidsForColor} says it
- * "cannot retrieve the ME input amount correctly". A stocking hatch buffers a little locally and pulls the rest
- * from the network on demand, so its readable contents are not the supply the machine has. Reporting that buffer as
- * a level would be a confident wrong number for exactly the AE2 setups this feature is meant to serve, so those
- * inputs are counted with {@link BufferCollector#addMeBacked()} and the UI says "ME".
+ * <b>ME hatches report what the network holds.</b> Every hatch is read through {@code getTankInfo}, not through the
+ * tank getters, because that is the call an ME hatch answers honestly: {@code MTEHatchInputME.getTankInfo} resolves
+ * each configured slot against the network with {@code extractItems(request, Actionable.SIMULATE, ...)} and reports
+ * the network's contents. SIMULATE takes nothing, so the read stays read-only, and GregScope needs no AE2
+ * dependency because it never names an AE2 type. Such a hatch reports {@code Integer.MAX_VALUE} as its capacity,
+ * which is recorded as unmeasurable rather than as a real capacity - an ME-backed input is not a buffer that can be
+ * full, and calling it 0% full would be worse than saying nothing.
+ *
+ * <p>
+ * <b>ME item busses are still only flagged.</b> {@code MTEHatchInputBusME.getStackInSlot} returns null for stocked
+ * slots outside recipe processing, and the method that holds the network amount writes to the hatch, so it cannot be
+ * called. Reading item stock needs a direct ME network query and an AE2 dependency: design-v0.3-buffers GS-306.
  */
 public final class BufferProbe {
 
@@ -95,15 +102,8 @@ public final class BufferProbe {
             }
             if (isMeBacked(hatch)) {
                 into.addMeBacked();
-                continue;
             }
-            if (hatch instanceof MTEHatchInput) {
-                MTEHatchInput tank = (MTEHatchInput) hatch;
-                addFluid(into, tank.getFluid(), tank.getCapacity());
-            } else if (hatch instanceof MTEHatchOutput) {
-                MTEHatchOutput tank = (MTEHatchOutput) hatch;
-                addFluid(into, tank.getFluid(), tank.getCapacity());
-            }
+            readTanks(hatch, into);
         }
     }
 
@@ -144,13 +144,46 @@ public final class BufferProbe {
         }
     }
 
+    /**
+     * Reads a hatch through {@code getTankInfo}, which is the call that makes an ME hatch tell the truth.
+     *
+     * <p>
+     * A plain hatch answers with its own tank either way, so this is not a special case bolted on for AE2 - it is
+     * simply the accessor that asks the holder what it has, rather than assuming the holder is a tank.
+     * {@code MTEHatchInputME.getTankInfo} resolves each configured slot against the ME network with
+     * {@code extractItems(request, Actionable.SIMULATE, ...)} and reports what the <em>network</em> holds, which is
+     * the number a player actually wants. SIMULATE takes nothing, so the read stays read-only.
+     */
+    private static void readTanks(MTEHatch hatch, BufferCollector into) {
+        FluidTankInfo[] tanks;
+        try {
+            tanks = hatch.getTankInfo(ForgeDirection.UNKNOWN);
+        } catch (RuntimeException e) {
+            // A hatch whose network is unreachable must not stop the machine being sampled.
+            return;
+        }
+        if (tanks == null) {
+            return;
+        }
+        for (int i = 0; i < tanks.length; i++) {
+            FluidTankInfo tank = tanks[i];
+            if (tank != null) {
+                addFluid(into, tank.fluid, tank.capacity);
+            }
+        }
+    }
+
     private static void addFluid(BufferCollector into, FluidStack stack, long capacity) {
+        // An ME hatch reports Integer.MAX_VALUE for "the network, however big that is". Treating that as a real
+        // capacity would make saturation read ~0% for a machine that is in fact perfectly supplied, so it is
+        // recorded as unmeasurable instead: an ME-backed input is not a buffer that can be full.
+        long room = capacity >= Integer.MAX_VALUE ? BufferReading.UNKNOWN_CAPACITY : capacity;
         if (stack == null) {
-            into.add(null, 0L, capacity);
+            into.add(null, 0L, room);
             return;
         }
         Fluid fluid = stack.getFluid();
-        into.add(fluid == null ? null : "f:" + fluid.getName(), stack.amount, capacity);
+        into.add(fluid == null ? null : "f:" + fluid.getName(), stack.amount, room);
     }
 
     private static void addItem(BufferCollector into, ItemStack stack) {

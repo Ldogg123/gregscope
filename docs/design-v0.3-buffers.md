@@ -42,16 +42,37 @@ promise is that it never writes to a machine, and that promise is enforced by te
 `getFluidAmount()`, `getCapacity()`. All read-only, no GT allocation, and GregScope controls the cost. Basic
 machines use `getFillableStack()` / `getDrainableStack()` and their own `mInputSlotCount` slots.
 
-### 2.2 ME hatches cannot be read honestly, and must say so
+### 2.2 ME hatches: read the network, not the local buffer
 
-GT's own javadoc on `getStoredFluidsForColor`: *"this cannot retrieve the ME input amount correctly"*. An
-`MTEHatchInputME`, `MTEHatchInputBusME` or `MTEHatchCraftingInputME` buffers a little locally and draws the rest
-from the ME network on demand, so its readable contents are **not** the supply available to the machine.
+First attempt was to flag ME inputs and report no amount, on the grounds that a stocking hatch's local buffer is not
+the machine's supply. That was too pessimistic, and GT already solves it.
 
-Reporting that buffer as a level would be exactly the failure that cancelled flow meters — a number that looks
-authoritative and is wrong, for precisely the AE2 setups that motivated this feature. So a machine with an ME input
-reports that input as **`me_network`**, with no amount, and the UI shows "ME" rather than a figure. A player reading
-"ME" learns something true; a player reading "128 L" would be misled.
+`MTEHatchInputME.getTankInfo()` resolves **each configured slot against the ME network**:
+
+```java
+IAEFluidStack request = AEFluidStack.create(slot.config);
+request.setStackSize(Integer.MAX_VALUE);
+IAEFluidStack result = sg.extractItems(request, Actionable.SIMULATE, getRequestSource());
+```
+
+`SIMULATE` takes nothing, so it stays read-only, and the number that comes back is **what the network holds** —
+which is what a player actually wants to know. So the walk reads every hatch through `getTankInfo` rather than
+through the tank getters: a plain hatch answers with its own tank, an ME hatch answers with the network, and
+GregScope needs no AE2 dependency at all because it never names an AE2 type.
+
+One adjustment falls out of it. An ME hatch reports `Integer.MAX_VALUE` as capacity, meaning "the network, however
+big that is". Treating that as a real capacity would make saturation read ~0% for a machine that is in fact
+perfectly supplied, so it is recorded as **unmeasurable** instead. An ME-backed input is not a buffer that can be
+full, and saying it is 0% full would be the confident wrong number this design keeps trying to avoid.
+
+**Items are not solved this way, and are deferred.** `MTEHatchInputBusME.getStackInSlot` returns `null` for stocked
+slots outside recipe processing, and the method that does hold the network amount, `updateInformationSlot`,
+**writes** to the hatch (`slot.extracted = ...`), so GregScope cannot call it. Reading item stock would mean going
+to the ME network directly — `getProxy().getStorage().getItemInventory()` and a `SIMULATE` extract of our own, the
+way OpenComputers' AE2 integration does. That works, but it costs a compile dependency on AE2 and a class-guard so
+GregScope still loads without it (the pattern v0.1 already uses for Forestry's apiary). Deferred to its own ticket
+(GS-306) so the dependency is a decision in its own right rather than a side effect of this one. Until then, an ME
+item bus contributes a flag and no amount, and the UI says so.
 
 ## 3. What is captured
 
@@ -62,7 +83,8 @@ Per machine, per sample, into the snapshot:
 - **itemsIn / itemsOut**: the same shape, `{item, count}`.
 - **inputSaturation / outputSaturation**: `amount / capacity` across the buffers of each direction, `NaN` when
   there is no capacity to speak of. This is the single number worth alerting on and the one the Hub shows.
-- **meInputs**: a count of ME-backed inputs, so "why is this machine's input empty" has an answer.
+- **meInputs**: a count of ME-backed inputs. Fluids from those hatches carry real network amounts (section 2.2);
+  item busses contribute the flag only, until GS-306.
 
 Resource identity follows the rules the cancelled design already fixed: `f:<Fluid.getName()>` and
 `i:<registryName>:<meta>`, sanitised to 64 characters, never numeric IDs. Strings are built in the sampler, never in
@@ -118,6 +140,7 @@ otherwise, the fallback stands.
 | GS-303 | Snapshot keys, OC, `/gregscope info` | S |
 | GS-304 | Hub detail line and the 5-minute trend from the second ring | M |
 | GS-305 | Benchmark, docs (`sensors-and-hub.md`, `metrics-model.md`, `testing.md`) | S |
+| GS-306 | ME **item** stock via a direct network query, with an AE2 soft dependency and a class guard | M |
 
 **Order:** GS-301 → GS-302 → GS-303 → GS-304 → GS-305.
 
