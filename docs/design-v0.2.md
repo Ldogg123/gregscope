@@ -3043,3 +3043,44 @@ the 4 new ones are `DocsCoverageTest`). Full `gregscope` Horizon-QA run on a fre
 
 **Carry-overs.** GS-121's manual client checklist is the remaining v0.2 item, and only a human at a real client can
 sign it off. Unchanged: the `/gregscope stats` half of surfacing `HistoryPersistence.sensorsAbandoned()`.
+
+
+### GS-121 (2026-09-18)
+
+**Scope.** The real-pack validation and the manual checklist. Split exactly as section 14 asks, and the split is the
+point: the automated half was run and its real output recorded, the manual half was **not** performed and every row
+is left unticked.
+
+**Automated, on the real pack.** `gregscope-server/pack` is a real GTNH 2.9.0-beta-3 dedicated server - 295 mods -
+and `smoke.py` boots it with the release jar in `mods/`, waits for `Done (...)`, stops cleanly and fails on a new
+crash report, a fatal-error line, a forced ERRORED state or an unclean stop. Two boots of
+`gregscope-81d71f4.jar`, both PASS:
+
+- **Zero new errors.** The distinct ERROR/FATAL lines are identical to the 37-line `baseline-errors.txt` captured
+  without GregScope, on both boots.
+- **Both recipes registered on the real pack**, not just the dev runtime:
+  `GregScope registered 1 Machine Sensor and 1 Telemetry Hub assembler recipes (0 unresolved ingredients)`, with
+  zero `OreDict entry` lines from any mod in the whole log. This is GS-117's acceptance criterion proven where it
+  actually matters - the dev runtime has a different item set.
+- **Both blocks/items injected and ID-mapped**, and `World/gregscope/registry.dat` created.
+- **A real restart re-reads the saved data**: first boot `registry: NONE, 1 recorded runs`, second boot
+  `registry: PRIMARY, 2 recorded runs`.
+
+**The limit of that last result, recorded rather than glossed.** Both boots had **zero sensors**, because placing
+one needs a player. They prove the registry file is written, re-read and appended to across a restart on the real
+pack. They do **not** prove a sensor's identity, label or 24 h of history survive a restart. That is manual row M7,
+and it is not ticked. The in-game suite does prove it against a dev server, which is a different claim.
+
+**Manual.** Fifteen rows in `docs/testing.md`, each with what to do, what to expect and blank date/pack/result
+columns. Three of them note what is already covered so the remaining manual surface is honest rather than
+pessimistic: the handshake logic is covered by `SafetyTests` and only a real connection stays manual; the Hub's
+server half is covered by sixteen `HubGuiServerTests` and only the *drawing* stays manual; the collision run was
+clean in the dev runtime under GS-117 and only the real pack with NEI stays manual.
+
+**Nothing was ticked that was not done.** The ticket's own wording - "do NOT tick any row you did not actually
+perform" - is repeated in the document, because a checklist that quietly marks itself complete is worse than no
+checklist.
+
+**v0.2.0 definition of done.** Every criterion in the handoff's new v0.2 list is met except the last, which reads
+"the GS-121 manual client checklist is signed off by a human". That one is the user's, and it is the only thing
+between v0.2 and a release.

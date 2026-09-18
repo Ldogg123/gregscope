@@ -1241,3 +1241,63 @@ Not part of §12, but still open before a release:
 - [ ] **Manual:** in that real pack, attach an Adapter to a machine and run the example script on a computer. Not done
   in the real pack; the same script runs on a real OpenOS computer against a real Adapter in the dev dependency set
   (`OpenComputersExampleScriptTests`).
+
+
+---
+
+## GS-121: real-pack validation and the manual client checklist
+
+Design-v0.2 section 14 splits this ticket in two. The automated half was run and its real output is recorded below.
+The manual half **has not been performed** - every row is unticked, and nobody should read this section as saying
+otherwise. These items need a human at a real client, which no test in this repo can be.
+
+### Automated: the real GTNH 2.9.0-beta-3 dedicated server (2026-09-18, jar `gregscope-81d71f4.jar`)
+
+Run with `python smoke.py` in `gregscope-server/`, which boots the real pack at `gregscope-server/pack` with the
+release jar in its `mods/`, waits for the `Done (...)` line, stops cleanly and fails on any new crash report, a
+fatal-error line, a forced ERRORED state or an unclean stop. **This is the actual pack, not the dev runtime**: 295
+mods loaded.
+
+| Check | Result |
+|---|---|
+| Boots and stops cleanly with GregScope installed | **PASS**, twice. 295 mods, `Done (1.372s)`, exit code 0 |
+| Adds no new errors | **PASS**. The run's distinct ERROR/FATAL lines are **identical** to the 37-line `baseline-errors.txt` captured without GregScope - zero new, on both boots |
+| Both blocks/items register | **PASS**. `Injected new block/item gregscope:telemetry_hub` and `gregscope:machine_sensor`, both ID-mapped |
+| Both recipes register, no empty OreDict entry | **PASS**. `GregScope registered 1 Machine Sensor and 1 Telemetry Hub assembler recipes (0 unresolved ingredients)`, and the log contains **zero** `OreDict entry` lines from any mod |
+| Saved data is created and read back | **PARTIAL - see the caveat.** First boot: `registry: NONE`, `1 recorded runs`, and `World/gregscope/registry.dat` appears. Second boot: `registry: PRIMARY`, `2 recorded runs` - the file really was read back and the runs table grew |
+| Size ceilings reported | **PASS**. `RAM 26.5 MB, history files 23.6 MB, registry 64 KB raw, writes 16.4 KB/min` for the default `limits.maxSensors=256` |
+
+> **Caveat on the persistence row, stated plainly.** Those two boots had **zero sensors**, because placing one needs
+> a player. They prove the registry file is written, re-read and appended to across a real restart on the real pack.
+> They do **not** prove that a sensor's identity, label or 24 h of history survive a restart - that is manual row M7
+> below, and it is not ticked.
+
+### Manual: client-side checklist - NOT PERFORMED
+
+Run these on a client connected to a dedicated server, then once against `gregscope-server/pack`. Record the date,
+the pack version and the result in the Result column. **Do not tick a row you did not perform.**
+
+| # | Check | What to expect | Date | Pack | Result |
+|---|---|---|---|---|---|
+| M1 | Place a sensor on a machine | The overlay renders on the covered face | | | |
+| M2 | Pipes, cables and conveyors on the covered face | All still work; the machine GUI still opens through the cover | | | |
+| M3 | Rename the sensor item in an anvil, then place it | The sensor carries that label | | | |
+| M4 | Open the Hub GUI | Opens; paging, the Problems filter, selection and label typing all work | | | |
+| M5 | Type a label as a player with no rename right | Refused, with the reason in chat | | | |
+| M6 | Unload a sensor's chunk, then look at its history | "loading history..." appears, then the gap is shown | | | |
+| M7 | Place a sensor, label it, run for a while, restart the server | The label and the history are still there, with a gap for the downtime | | | |
+| M8 | Connect a client with no GregScope, and one on a different version | Both refused at the handshake with a clear message | | | |
+| M9 | NEI | Both recipes appear and look right | | | |
+| M10 | Recipe collision run on the real pack | Clean; no GregScope item in any collision | | | |
+| M11 | After ~2 h of play, `/gregscope stats` | p99 <= 1 ms/tick and `ioDroppedTotal = 0` | | | |
+| M12 | Remove the mod from a **copy** of the world and load it | Loads after the FML prompt; machines intact; sensors gone | | | |
+| M13 | WAILA on a healthy sensor (GS-REV-1) | Reads "GregScope sensor", never the inert wording | | | |
+| M14 | A real player attaches a cover past the cap | The player is the owner, and the over-cap chat line appears | | | |
+| M15 | An outdoor machine with a sensor on an exposed face, in a thunderstorm (GS-REV-4) | It no longer catches fire or explodes - the accepted side effect, confirmed once | | | |
+
+**Partly covered already, which is why these are the only manual rows left.** M8's logic is covered by
+`SafetyTests.handshakeRequiresMatchingClient`, which asks FML's own checker; what stays manual is a real connection.
+M4's server half is covered by the sixteen `HubGuiServerTests`, which drive `buildUI` and every named sync handler
+on a dedicated server; what stays manual is whether the client *draws* it. M10's dev-runtime half was run under
+GS-117 with `-Dgt.recipebuilder.recipe_collision_check=true` and was clean; what stays manual is the real pack with
+NEI.
