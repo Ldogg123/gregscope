@@ -67,8 +67,13 @@ class PersistenceScenarioTest {
     /** Enough drain/flush rounds for load -> create -> write to finish, whatever order the I/O thread answers in. */
     private static final int SETTLE_ROUNDS = 6;
 
-    /** Creates that throw before writes work again; under MAX_FILE_FAILURES, so nothing is abandoned. */
-    private static final int FAILING_CREATES = 3;
+    /**
+     * Every write throws until the scenario turns it off again. A budget would be counted down by whichever calls the
+     * I/O thread happened to make, which is not something a test can predict: a minute that closes while a create is
+     * in flight queues a slot write too, and that write would eat one of the failures a counted budget meant for the
+     * creates. The scenario stays under {@link HistoryPersistence#MAX_FILE_FAILURES} by bounding its drain rounds.
+     */
+    private static final int ALL_WRITES_FAIL = Integer.MAX_VALUE;
 
     private MemoryFileStore store;
     private HistoryIo io;
@@ -429,31 +434,38 @@ class PersistenceScenarioTest {
      * A {@code CreateFile} that throws leaves no file, so every later minute would queue a slot write into nothing -
      * one error per sensor per minute, for ever. The sensor goes back to REQUESTED instead and the next result
      * writes the whole ring into a fresh file, so the minutes recorded meanwhile are not lost either.
+     *
+     * <p>
+     * The assertions are about what reached the store, never about the counters at one instant: see
+     * {@link #assertNothingLanded(String)} for why GregScope's own queue counters are not a sound thing to pin a
+     * moment of this scenario to.
      */
     @Test
     void aCreateThatThrowsDoesNotLeaveTheSensorThinkingItHasAFile() {
         Run run = newRun();
-        // Every create throws while this phase lasts. How many are attempted depends on the I/O thread: a retry that
-        // finishes inside the same drain queues the next one straight away, which is correct either way.
-        store.failWrites.set(FAILING_CREATES);
+        store.failWrites.set(ALL_WRITES_FAIL);
         SensorEntry live = registerWithoutDrain(run);
         awaitFileWork(run, () -> run.history.writesFailed() > 0, "the failed create was never reported");
         assertTrue(run.history.filesCreated() > 0, "the create was never queued");
-        assertFalse(store.exists(SENSOR), "the create threw, so there is no file");
-        assertOnlyAnInFlightCreateIsBelieved(run);
+        assertNothingLanded("the create threw, so nothing is on disk");
 
-        // A minute closes while there is no file: it must not be written as a slot into a file that is not there.
+        // A minute closes while there is no file. Whether it is queued as a slot depends on the I/O thread - a create
+        // whose failure has not been applied yet still looks PRESENT - but it can never reach a file that is not
+        // there, which is the part that matters and the part the store itself refuses.
         recordMinutes(run, live, 2);
         flush();
-        assertEquals(0, run.history.slotsWritten(), "no slot may be written while there is no file");
-        assertFalse(store.exists(SENSOR), "still no file while every create throws");
-        assertOnlyAnInFlightCreateIsBelieved(run);
+        run.history.drain();
+        flush();
+        assertNothingLanded("no write may land while every write throws");
+        assertEquals(0, run.history.sensorsAbandoned(), "the sensor was given up on too early");
 
         // Writes work again: the retry reads (nothing), so a whole fresh image is written, minutes and all.
         store.failWrites.set(0);
-        long failedCreates = run.history.writesFailed();
         awaitFileWork(run, () -> store.exists(SENSOR), "the file was never recreated");
-        assertEquals(failedCreates + 1, run.history.filesCreated(), "every failed create plus the one that landed");
+        assertEquals(1, store.creates(), "exactly one create may ever have landed");
+        assertTrue(
+            run.history.filesCreated() > store.creates(),
+            "every create before the one that landed must have been queued and failed");
         assertEquals(
             HistoryFileCodec.Status.OK,
             HistoryFileCodec.inspect(store.history(SENSOR), SENSOR),
@@ -581,21 +593,21 @@ class PersistenceScenarioTest {
      * after the one that applied the failure.
      */
     /**
-     * The race-free form of "the sensor stopped believing in the file": for the one sensor these scenarios register,
-     * every create ever queued has either had its failure applied or is the one still in flight.
+     * Nothing at all reached the store: no file, no create and no slot.
      *
      * <p>
-     * Asserting {@code !filePresent} at a moment of the test's choosing is not sound, because
-     * {@link HistoryPersistence#drain()} applies write failures first and load results afterwards: the drain that
+     * This is the race-free form of "there is no file and nothing was written into it". The counters GregScope keeps
+     * ({@code filesCreated}, {@code slotsWritten}) count what it <em>queued</em>, and what it queues depends on the
+     * I/O thread: {@link HistoryPersistence#drain()} applies write failures before load results, so the drain that
      * puts the sensor back to REQUESTED also re-queues its load, and if the I/O thread answers that load inside the
-     * same drain the sensor legitimately believes in a file again before the call returns. Both orders are correct,
-     * so the test asserts the invariant that holds in both instead of the state of one of them.
+     * same drain the sensor is optimistically PRESENT again before the call returns - and a minute closing in that
+     * window is queued as a slot write. Both orders are correct. What must be true in both is that nothing lands,
+     * which is what the store counts.
      */
-    private void assertOnlyAnInFlightCreateIsBelieved(Run run) {
-        assertEquals(
-            run.history.writesFailed() + (run.history.filePresent(SENSOR) ? 1L : 0L),
-            run.history.filesCreated(),
-            "the sensor believes in a file it did not just queue a create for");
+    private void assertNothingLanded(String message) {
+        assertFalse(store.exists(SENSOR), message);
+        assertEquals(0, store.creates(), message + " (a create landed)");
+        assertEquals(0, store.slots(), message + " (a slot landed)");
     }
 
     private void awaitFileWork(Run run, BooleanSupplier until, String message) {
@@ -633,6 +645,9 @@ class PersistenceScenarioTest {
 
         private final Map<String, byte[]> files = new ConcurrentHashMap<>();
         private final AtomicInteger quarantined = new AtomicInteger();
+        /** Writes that really landed, so a test can assert that nothing reached the disk at all. */
+        private final AtomicInteger creates = new AtomicInteger();
+        private final AtomicInteger slots = new AtomicInteger();
         /** How many further reads must throw; a virus scanner holding the file open, in one field. */
         /**
          * Milliseconds every file call sleeps, so a run can force the other order. Zero by default; set
@@ -696,6 +711,16 @@ class PersistenceScenarioTest {
             return quarantined.get();
         }
 
+        /** Creates that really reached the store, as opposed to the ones GregScope queued. */
+        int creates() {
+            return creates.get();
+        }
+
+        /** Slot writes that really reached a file, as opposed to the ones GregScope queued. */
+        int slots() {
+            return slots.get();
+        }
+
         @Override
         public byte[] readHistory(UUID id) throws IOException {
             pause();
@@ -720,6 +745,7 @@ class PersistenceScenarioTest {
                 throw new IOException("bad image");
             }
             files.put(key(id), file.clone());
+            creates.incrementAndGet();
         }
 
         @Override
@@ -735,6 +761,7 @@ class PersistenceScenarioTest {
                 throw new IOException("a minute slot is " + HistoryFileCodec.SLOT_SIZE + " B");
             }
             System.arraycopy(slot, 0, file, HistoryFileCodec.slotOffset(index), slot.length);
+            slots.incrementAndGet();
         }
 
         @Override
