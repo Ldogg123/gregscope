@@ -440,13 +440,14 @@ class PersistenceScenarioTest {
         awaitFileWork(run, () -> run.history.writesFailed() > 0, "the failed create was never reported");
         assertTrue(run.history.filesCreated() > 0, "the create was never queued");
         assertFalse(store.exists(SENSOR), "the create threw, so there is no file");
-        assertFalse(run.history.filePresent(SENSOR), "the sensor must stop believing in the file");
+        assertOnlyAnInFlightCreateIsBelieved(run);
 
         // A minute closes while there is no file: it must not be written as a slot into a file that is not there.
         recordMinutes(run, live, 2);
         flush();
         assertEquals(0, run.history.slotsWritten(), "no slot may be written while there is no file");
         assertFalse(store.exists(SENSOR), "still no file while every create throws");
+        assertOnlyAnInFlightCreateIsBelieved(run);
 
         // Writes work again: the retry reads (nothing), so a whole fresh image is written, minutes and all.
         store.failWrites.set(0);
@@ -579,6 +580,24 @@ class PersistenceScenarioTest {
      * the condition, so the state a scenario wants to observe is not run past: a retry is only queued by the drain
      * after the one that applied the failure.
      */
+    /**
+     * The race-free form of "the sensor stopped believing in the file": for the one sensor these scenarios register,
+     * every create ever queued has either had its failure applied or is the one still in flight.
+     *
+     * <p>
+     * Asserting {@code !filePresent} at a moment of the test's choosing is not sound, because
+     * {@link HistoryPersistence#drain()} applies write failures first and load results afterwards: the drain that
+     * puts the sensor back to REQUESTED also re-queues its load, and if the I/O thread answers that load inside the
+     * same drain the sensor legitimately believes in a file again before the call returns. Both orders are correct,
+     * so the test asserts the invariant that holds in both instead of the state of one of them.
+     */
+    private void assertOnlyAnInFlightCreateIsBelieved(Run run) {
+        assertEquals(
+            run.history.writesFailed() + (run.history.filePresent(SENSOR) ? 1L : 0L),
+            run.history.filesCreated(),
+            "the sensor believes in a file it did not just queue a create for");
+    }
+
     private void awaitFileWork(Run run, BooleanSupplier until, String message) {
         for (int round = 0; round < SETTLE_ROUNDS && !until.getAsBoolean(); round++) {
             run.history.drain();
