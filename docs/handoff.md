@@ -452,6 +452,23 @@ v0.1 is done when all of the following are true:
 - [ ] Includes a working Lua example and schema documentation.
 - [ ] Has no measurable idle cost when nobody calls the component.
 
+### Definition of done for v0.2 (added by GS-120)
+
+v0.2 keeps every v0.1 guarantee except the two it deliberately lifts (it now adds blocks, items, recipes and saved
+data, and it does periodic work), and adds:
+
+- [ ] Unit and Horizon-QA suites green inside the CI step, on a **fresh** world.
+- [ ] Transparency tests prove a covered face still passes items, fluids, EU and redstone, and that the sensor never
+      writes to a machine.
+- [ ] No mixins, no access transformers and no reflection in shipped code (reflection is allowed in tests).
+- [ ] Tests prove GregScope never loads a chunk or a dimension.
+- [ ] The per-tick sampling budget and the memory and disk ceilings are enforced and visible in `/gregscope stats`.
+- [ ] Sensor identity survives the machine being broken and replaced, a chunk reload and a restart.
+- [ ] Access rules hold at every entry point, including a client-to-server GUI open that never touches the block.
+- [ ] Removing the mod leaves the world loadable and the machines intact.
+- [ ] Every config key, NBT key and OpenComputers callback appears in the documentation (`DocsCoverageTest`).
+- [ ] The GS-121 manual client checklist is signed off by a human.
+
 ## 13. Performance and safety budgets
 
 - v0.1 performs no periodic work. A snapshot is built only when an OC caller asks for it.
@@ -461,6 +478,22 @@ v0.1 is done when all of the following are true:
 - Keep the API read-only. Machine control can be considered separately with explicit permissions and redstone-equivalent balance constraints.
 - Log invalid targets at debug level at most; normal block removal is not an error.
 - Avoid per-call INFO logging.
+
+### Budget for v0.2 (added by GS-120; replaces "v0.1 performs no periodic work")
+
+v0.2 samples, so the "no periodic work" rule is replaced by a bounded one:
+
+- One server-tick handler. Each LIVE sensor is sampled every `sampling.intervalTicks` (20, 40, 60 or 100), spread
+  across ticks rather than all in one.
+- `sampling.tickBudgetMicros` (default 1000 us) is a **hard** per-tick cap. When a cycle would exceed it the rest is
+  deferred to the next tick; the tick is never made longer to finish sampling.
+- Sensors past `limits.maxSensors` or `limits.maxSensorsPerTeam` are not sampled at all.
+- Disk writes go to a bounded queue (`history.ioQueueCapacity`) drained by one I/O thread. When it is full, writes
+  are **dropped and counted**, never blocked on, so a slow disk cannot stall the server thread.
+- Memory is bounded by construction: 24 h of history is a fixed 1,440-slot ring per sensor, and a history file is a
+  fixed 92,224 B. Neither grows with uptime.
+- Still true from v0.1: never force-load a chunk, never retain unbounded time series or labels, no per-call INFO
+  logging, and normal block removal is not an error.
 
 ## 14. Roadmap after v0.1
 
@@ -522,6 +555,29 @@ These do not block v0.1.
 8. **Official-pack ambition:** private server addon first, or design immediately for GTNH review?
 
 The recommended answers for now are: keep the name provisional, target EV for the first physical Hub, use teams when GTNHLib integration arrives, and prefer upstream read-only getters over mixins.
+
+### Answers as of v0.2 (added by GS-120)
+
+Seven of the eight are now decided by what v0.2 actually shipped, not by preference.
+
+1. **Final name:** still **GregScope**, still provisional. Nothing outside the repo depends on it yet; the mod id
+   `gregscope` is what would be expensive to change, because it is baked into OpenComputers component names, the
+   config path and the world folder.
+2. **Progression:** **MV for the Machine Sensor, EV for the Telemetry Hub.** The sensor is cheap on purpose - you
+   want one per machine - and the Hub is the tier gate.
+3. **Ownership:** **both.** A sensor records the player who attached it, and access extends to that player's GTNHLib
+   team. An unowned sensor (placed by a robot, say) is visible only to operators.
+4. **Recipe identity:** **not needed, and no mixin was added.** GT's own `CheckRecipeResult` and `ShutDownReason`
+   carry stable keys, read through their public API. This question can be closed.
+5. **Parallel count:** **still open**, and still not worth a mixin. It is not in v0.2's snapshot.
+6. **Flow semantics:** **both**, decided in `design-v0.3.md` - attempted and accepted are counted separately,
+   because the gap between them is exactly what tells you a line is backed up. Not implemented in v0.2.
+7. **History retention:** **separate files**, one fixed-size `.gsh` per sensor under `<world>/gregscope/`, not
+   world-save NBT. Fixed size means bounded memory and disk, in-place slot writes, and a file a third party can read;
+   see `history-format-v1.md`. External Prometheus retention (v0.4) sits on top rather than replacing it.
+8. **Official-pack ambition:** **private server addon first.** v0.2 was nevertheless built to GTNH's conventions
+   throughout - no mixins, no ATs, no shipped reflection, Spotless and Checkstyle in CI, Horizon-QA in-game tests -
+   so that submitting it later is a review, not a rewrite.
 
 ## 16. Instructions for the first coding-agent session
 

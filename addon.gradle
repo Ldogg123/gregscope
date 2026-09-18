@@ -62,3 +62,12 @@ dependencies {
         jvmArgs("-ea:io.github.ldogg123.gregscope...")
     }
 }
+
+// GS-120: DocsCoverageTest reads the real files under docs/, so they are inputs to the test task. Without this,
+// Gradle sees no change after a documentation edit and reports a stale PASS - which is exactly how a negative
+// control for that test first appeared to succeed.
+tasks.named("test", Test) {
+    inputs.dir("docs")
+        .withPropertyName("docs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

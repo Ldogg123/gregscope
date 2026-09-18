@@ -2972,3 +2972,74 @@ the new batch carries `timeoutTicks = 20` because all five tests are synchronous
    about overlap would be a fact rather than a guess.
 
 **Carry-over.** Unchanged: the `/gregscope stats` half of surfacing `HistoryPersistence.sensorsAbandoned()`.
+
+
+### GS-120 (2026-09-18)
+
+**Scope.** The documentation rewrite and its acceptance test. Two new documents, a README that finally tells the
+truth about installing v0.2, the handoff's v0.2 definition of done, budget and section 15 answers, the 0.2.0 release
+notes, and `DocsCoverageTest`. One build-script change; no shipped class touched.
+
+**`docs/sensors-and-hub.md`** is the player-and-operator guide: what the two devices are, where a sensor may go,
+what identity means and what it survives, who may see and rename what, the six lifecycle states, the three caps,
+every one of the thirteen config keys with default and range, all five commands, and what removing a sensor or the
+mod actually does. It states the accepted GS-REV-4 weather side effect plainly rather than burying it, because a
+player who loses a machine to a thunderstorm that *stopped* happening deserves to have been told.
+
+**`docs/history-format-v1.md`** is the byte-level reference: file layout, the 64-byte header, the 64-byte minute
+slot, the pinned state codes and gap-reason bits, the sensor's own cover NBT, and the reader's validation sequence.
+It calls out the two different sentinels (`Long.MIN_VALUE` = "no reading", `-1` = "cannot have this reading") and
+gives the section 7.4 window rule its own paragraph, because a reader that ignores it silently reports day-old
+minutes as current.
+
+**README.** v0.1's install section said "clients do not need GregScope", which v0.2 makes false. The install is now
+split v0.2 / v0.1 with the change called out at the top of the file as well, and a v0.2 scope section sits beside
+the v0.1 one.
+
+**`DocsCoverageTest`, and two corrections to its own first draft.** The AC asks that every config key, NBT key and
+OC callback appear in the docs, with the list read from the code rather than copied. Config keys come from
+`ConfigKeys.ALL` and NBT keys from `SensorNbtCodec`'s own fields, both reflectively (both classes are `[pure]`, so a
+plain-JVM test may load them). The OpenComputers callbacks are read by parsing the **class files** of the two
+environments for methods carrying OC's `@Callback`, because those classes import OpenComputers and a unit test must
+never load it.
+
+The first draft passed immediately, which was the tell. Two things were wrong with it:
+
+1. **It matched bare substrings.** The NBT keys are `gs`, `ct`, `lbl`: `contains("ct")` is satisfied by the word
+   "collect" and `contains("gs")` by "flags", so every key counted as documented by accident. A name now only counts
+   inside a markdown code span or quotes. Tightening it immediately found two genuinely undocumented config keys,
+   `history.ioQueueCapacity` and `permissions.renameRequiresOfficer`.
+2. **It searched all of `docs/`.** That sounds generous and is weaker than it looks: this test's own row in
+   `testing.md` names the two keys it caught, which would have "documented" them for ever after. A design note or a
+   test description mentioning a key in passing is not documentation. Each vocabulary is now scoped to the files a
+   reader is actually pointed at - config keys and NBT keys to the guide and the format reference, callbacks to
+   `opencomputers.md` - and the test asserts those files were found, so a renamed document cannot make the check
+   pass by reading nothing. Scoping it found a third real gap: the cover's eight NBT keys were documented nowhere,
+   which now section 4.3 of the format reference fixes.
+
+**A build-script fix the negative control forced.** The first attempt at a negative control appeared to *pass*:
+editing `docs/` and re-running `./gradlew test` reported success, because `docs/` was not an input of the `test`
+task, so Gradle skipped it as up to date and reported a stale result. That is a documentation test that cannot fail
+locally. `addon.gradle` now declares `docs/` as an input of `test`; with it, the same edit re-runs the test and it
+fails. CI was never affected (a fresh checkout always runs), which is exactly why it was worth catching here.
+
+**Two false claims of my own, caught by checking.** The format reference first credited `MinuteSlotTest`, which does
+not exist - the class is `MinuteSlotCodecTest`, and `LayoutSizesTest` covers the sizes. And the first negative
+control mutated a key that the handoff also mentioned, so the test's continued pass was correct and my control was
+invalid; it was redone against the scoped search.
+
+**Results.** `spotlessApply` + `build`: BUILD SUCCESSFUL, **648 unit tests in 43 classes** green (644 in 42 before;
+the 4 new ones are `DocsCoverageTest`). Full `gregscope` Horizon-QA run on a fresh world: **170 passed, 4 skipped,
+0 failed**. No shipped class changed, so the jar and the batch budget are GS-119's unchanged.
+
+**Negative controls (three, each reverted).**
+
+1. `history.ioQueueCapacity` renamed in the guide: `everyConfigKeyIsDocumented` fails naming it - but only after the
+   `docs/` input fix, which is how that bug was found.
+2. The same mutation before the search was scoped: the test **passed**, because the handoff and `testing.md` also
+   mention the key. That is the measurement behind scoping each vocabulary to its own document.
+3. The NBT keys, before section 4.3 existed: `everySensorNbtKeyIsDocumented` fails with all eight
+   (`[gs, idM, idL, lbl, owM, owL, owN, ct]`).
+
+**Carry-overs.** GS-121's manual client checklist is the remaining v0.2 item, and only a human at a real client can
+sign it off. Unchanged: the `/gregscope stats` half of surfacing `HistoryPersistence.sensorsAbandoned()`.
