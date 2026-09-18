@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -62,6 +63,9 @@ class PersistenceScenarioTest {
     private static final int Y = 64;
     private static final int Z = -30;
     private static final int SIDE = 1;
+
+    /** Enough drain/flush rounds for load -> create -> write to finish, whatever order the I/O thread answers in. */
+    private static final int SETTLE_ROUNDS = 6;
 
     private MemoryFileStore store;
     private HistoryIo io;
@@ -408,12 +412,9 @@ class PersistenceScenarioTest {
         assertEquals(0, store.quarantined(), "a read that threw renames nothing");
         assertArrayEquals(onDisk, store.history(SENSOR), "the file on disk was touched");
 
-        // The next drain asks again, and this time the disk answers. drain() queues the retry and then takes whatever
-        // the I/O thread has finished, so a fast thread can answer inside that same call; both orders are correct.
-        int applied = second.history.drain();
-        flush();
-        applied += second.history.drain();
-        assertEquals(1, applied, "the retried load was not applied");
+        // The retry asks again, and this time the disk answers.
+        awaitFileWork(second, restored::historyLoaded, "the retried load was never applied");
+        assertEquals(1, second.history.loadsFailed(), "only the first read may have failed");
         assertTrue(restored.historyLoaded(), "the retry must finish the job");
         assertEquals(MINUTES, second.history.slotsMerged(), "the history is back");
         assertEquals(0, second.history.filesCreated(), "an existing file must not be recreated");
@@ -431,15 +432,11 @@ class PersistenceScenarioTest {
         Run run = newRun();
         store.failWrites.set(1);
         SensorEntry live = registerWithoutDrain(run);
-        flush();
-        run.history.drain();
-        flush();
+        // The absent load is applied, queues the create, and the create throws. Stop at the failure: the retry is only
+        // queued by the drain after it, so the file is still missing here.
+        awaitFileWork(run, () -> run.history.writesFailed() == 1, "the failed create was never reported");
         assertEquals(1, run.history.filesCreated(), "the create was queued");
         assertFalse(store.exists(SENSOR), "the create threw, so there is no file");
-
-        // A write failure is not a load result, so the drain applies it and still reports no applied load.
-        assertEquals(0, run.history.drain(), "a write failure is not an applied load");
-        assertEquals(1, run.history.writesFailed(), "the failed write must be counted");
         assertFalse(run.history.filePresent(SENSOR), "the sensor must stop believing in the file");
 
         // A minute closes while there is no file: it must not be written as a slot into a file that is not there.
@@ -448,11 +445,7 @@ class PersistenceScenarioTest {
         assertEquals(0, run.history.slotsWritten(), "no slot may be written while there is no file");
 
         // The retry reads (nothing), so a whole fresh image is written, minutes and all.
-        run.history.drain();
-        flush();
-        run.history.drain();
-        flush();
-        assertTrue(store.exists(SENSOR), "the file was never recreated");
+        awaitFileWork(run, () -> store.exists(SENSOR), "the file was never recreated");
         assertEquals(2, run.history.filesCreated(), "the second create is the one that landed");
         assertEquals(
             HistoryFileCodec.Status.OK,
@@ -570,6 +563,24 @@ class PersistenceScenarioTest {
         assertTrue(io.flush(10_000L), "the I/O queue did not drain");
     }
 
+    /**
+     * Runs drain/flush rounds until {@code until} holds, and fails if it never does.
+     *
+     * <p>
+     * {@code drain()} queues what the last results asked for and then applies whatever the I/O thread has already
+     * finished, so whether a result lands in this call or the next one depends on the thread. Both orders are correct,
+     * so a test waits for the state it is about instead of counting drains. It stops at the first drain that satisfies
+     * the condition, so the state a scenario wants to observe is not run past: a retry is only queued by the drain
+     * after the one that applied the failure.
+     */
+    private void awaitFileWork(Run run, BooleanSupplier until, String message) {
+        for (int round = 0; round < SETTLE_ROUNDS && !until.getAsBoolean(); round++) {
+            run.history.drain();
+            flush();
+        }
+        assertTrue(until.getAsBoolean(), message);
+    }
+
     /** No teams at all: every sensor here is unowned, which is all the caps need. */
     private static final class NoTeams implements TeamResolver<Object> {
 
@@ -598,6 +609,12 @@ class PersistenceScenarioTest {
         private final Map<String, byte[]> files = new ConcurrentHashMap<>();
         private final AtomicInteger quarantined = new AtomicInteger();
         /** How many further reads must throw; a virus scanner holding the file open, in one field. */
+        /**
+         * Milliseconds every file call sleeps, so a run can force the other order. Zero by default; set
+         * {@code -Dgregscope.test.ioDelayMs=30} to make the I/O thread lose every race. Both orders must pass.
+         */
+        private final long delayMillis = Long.getLong("gregscope.test.ioDelayMs", 0L);
+
         private final AtomicInteger failReads = new AtomicInteger();
         /** How many further file writes (create or slot) must throw: a full or unwritable disk. */
         private final AtomicInteger failWrites = new AtomicInteger();
@@ -607,6 +624,19 @@ class PersistenceScenarioTest {
         }
 
         /** True if this call must throw. Counted down, so a test can fail exactly as often as it wants to. */
+        /** Sleeps {@link #delayMillis} so a run can force the I/O thread to answer one drain later. */
+        private void pause() {
+            if (delayMillis <= 0L) {
+                return;
+            }
+            try {
+                Thread.sleep(delayMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread()
+                    .interrupt();
+            }
+        }
+
         private static boolean fails(AtomicInteger budget) {
             while (true) {
                 int left = budget.get();
@@ -643,6 +673,7 @@ class PersistenceScenarioTest {
 
         @Override
         public byte[] readHistory(UUID id) throws IOException {
+            pause();
             if (fails(failReads)) {
                 throw new IOException("cannot read " + key(id));
             }
