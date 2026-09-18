@@ -2260,3 +2260,91 @@ dropping the new `report(task)` call in `HistoryIo.perform` failed exactly the f
 restoring `TelemetryFrame.EMPTY`'s nulls failed exactly one in-game test with
 `NullPointerException at GregScopeCommand.stats(GregScopeCommand.java:190)` - the reported bug, reproduced. Both were
 reverted and verified with `cmp`.
+
+### GS-113 (2026-09-17)
+
+**Scope.** Section 9.2's data side only: the scope filter, the sort, the Problems filter, paging, selection by UUID,
+the 5-minute and 24-hour summaries, the hourly strip, the DTO codecs and the rebuild throttle. Every class is
+`[pure]`; nothing here can reach a `World`, a tile entity or MUI2, and GS-114 is still the whole GUI.
+
+- **Two classes section 2 does not name.** Section 2 lists `[pure] HubViewModel, HubRow/HubDetail/HubHeader DTOs +
+  codecs over ByteSink/ByteSource`, and that is what shipped, plus two more. `hub/HubCodecs` is the codecs themselves
+  (section 2 names the seam but not the class that writes the layouts), and it also holds the caps, the sentinels and
+  the pinned availability codes, so the wire format lives in exactly one file. `hub/HubWindow` is the "Last 5 min" /
+  "Last 24 h" line as its own DTO: it is the wire form of `Summaries.Summary`, and inlining its twelve fields twice
+  into `HubDetail` would have made both the layout and the equality check twice as easy to get wrong.
+- **Availability codes are pinned here, and could not be reused from anywhere.** A row and a detail carry an
+  availability byte. `SensorState.ordinal()` is exactly what erratum E6 forbids, and `SensorState.persistedCode()`
+  has **no code for LIVE** (section 8.3 never persists it), which is the one code the Hub needs most.
+  `HubCodecs.AVAILABILITY_*` is therefore its own table, in the order of section 10.1's availability ids
+  (`live, unloaded, over_cap, missing, in_item, removed`), and `availabilityId(int)` returns those ids, so the Hub,
+  OpenComputers and the section 16.2 exporter model all say the same word.
+- **Every DTO layout starts with a format byte and decoding rejects.** Encoding **caps** a string (a machine name
+  arrives from GT and is nobody's fault); decoding **refuses** one over the section 9.3 caps, refuses any format
+  other than 1, and refuses an unknown availability or state code, because a decoder is reading bytes someone else
+  sent. `ByteSource.readString(int)` takes the cap so a real packet buffer can refuse while reading rather than
+  after, and `HubCodecs` re-checks the length anyway - which is what makes the rule testable without a buffer, and
+  what the negative control removed.
+- **"Any warning" is read as "any warning on a current reading" (a decision, not a deviation).** Section 9.2's
+  Problems filter is "LIVE with a state in {...}, or MISSING, or any warning". A sensor that is not LIVE has no
+  current reading, and its last snapshot can be days old, so a maintenance warning recorded before a chunk unloaded
+  would pin a machine nobody can see into the Problems list for ever - the opposite of what the filter is for.
+  MISSING is a problem on its own, so nothing is lost.
+  `HubViewModelTest.aStaleWarningOnAnUnloadedSensorIsNotAProblem` is that reading, written down.
+- **A row hides stale machine data; the detail shows it with its age.** For anything that is not LIVE a row's state
+  is `unavailable`, its EU/t is the absent sentinel and its warning flag is false, which is exactly how section 9.2
+  draws its `UNLOADED` row (empty state and EU columns, only an age). The detail pane does show the last known
+  snapshot whatever the availability, because it also shows `sampleAgeSeconds`; a player who selects an unloaded
+  machine wants to know what it was doing when it went away, and the age is the qualifier a row has no room for.
+- **Three severity ranks section 9.2's list does not name.** Its order names MISSING and UNLOADED but not IN_ITEM,
+  REMOVED or a LIVE sensor whose machine could not be read. IN_ITEM and REMOVED sort immediately after MISSING (they
+  are tombstones too, and the same "this is gone" news), UNLOADED keeps its place after them, and a LIVE sensor with
+  no readable snapshot sorts **last**, below `idle`: section 9.2's Problems list deliberately does not contain
+  `unavailable`, so it must not be shown as one, and it is the least interesting row on a healthy server.
+- **The throttle keys on the sequence and the inputs only - `nowEpochSec` is deliberately not an input.** Section
+  9.3's rule is "rebuild runs only when `frame.sequence` or a session input changes", and that is what shipped. The
+  consequence is worth knowing: the ages a rebuild computed are as old as the frame, never more than one
+  `sampling.intervalTicks` (one second by default, five at `intervalTicks=100`). The alternative - making the clock
+  an input - would rebuild and re-sort every GUI tick on an idle server for a one-second-fresher "12m".
+- **Paging is 0-based inside the model and clamped twice.** `setPage` clamps against the **last built** page count,
+  which is what a `gs_page` value can be checked against the moment it arrives; `rebuild` clamps again against the
+  new count, which is what makes a viewer on page 3 of a list that just shrank land on the last page instead of on
+  eight empty rows. Section 9.3's "page -5 to 0, 999 to last" is the first clamp; the second is the one the negative
+  control removed.
+- **A selection the filter hides is kept; a selection outside the scope is dropped.** Section 9.3 only requires that
+  the selection survive resorting, which it does because it is a UUID. Switching to Problems would otherwise throw
+  away the healthy machine the player was reading, so the detail pane follows the sensor and not the page. A sensor
+  that leaves the Hub owner's scope (purged, or its owner left the team) is dropped, because nothing may show a
+  sensor the scope no longer contains.
+- **`canEdit` is `canRename` and LIVE; the cooldown is not in it.** Section 9.3's `gs_label` also checks the
+  per-player rename cooldown, which is a transient rate limit rather than a capability: putting it in the DTO would
+  grey the field out for a few seconds after every successful rename and would need the clock as a rebuild input.
+  GS-114 checks it at write time through the same `SensorRegistry.writeLabel` the command uses (GS-111's note).
+- **Carry-over closed: `sensorsAbandoned` has a Hub column.** `HubHeader.sensorsAbandoned()` carries
+  `HistoryPersistence.sensorsAbandoned()` (the review follow-up's "given up on for the rest of the run" counter),
+  fed by `HubViewModel.setSensorsAbandoned(int)` per rebuild. **GS-114 owes the wiring**: until the panel calls the
+  setter the column reads 0, which is also its value on a healthy server. The `/gregscope stats` half of that
+  carry-over was left alone - GS-113 touches no command. The other carry-over, `TelemetryHubs.views().opened/closed`
+  around the real MUI2 panel, is still GS-114's and untouched here.
+- **Two smaller readings of section 9.2's mock-up.** Its detail line shows the short id `3fa2c1d0`; the DTO carries
+  the full UUID and the client derives the short form with `Labels.shortId`, because the client needs the UUID for
+  `gs_select` anyway and eight hex digits are not an identifier. And its strip is drawn 14 characters wide; the DTO
+  carries one value per hour, 24 of them, with the symbol table (`#` 75%, `=` 50%, `-` 25%, `.` below, `?` gap)
+  pinned in `HubDetail.symbol` rather than on the client, so every surface that ever draws a strip draws the same
+  one. The strip and the 24-hour summary cover exactly the same window, `MinuteRing.SLOTS` minutes, which a unit
+  test asserts.
+- **design-v0.3 GS-201 hooks.** `HubRow` carries `kind` although v0.2 only publishes kind 0, so the v0.3 Hub's kind
+  label and its kind-aware sort need no wire change. `HubViewModel.clampFilter` maps design-v0.3 section 6.2's
+  values 2 (Machines) and 3 (Flow) to All, which is what section 9.3 requires of a v0.2 server reading a value it
+  does not know, and a unit test pins that. The flow columns section 6.2 adds to `HubRow` (`unit`,
+  `acceptedPerMin`, `attemptedPerMin`, `flowState`, `resourceKey`) are deliberately **not** built: v0.2 has nothing
+  to put in them, and `HubCodecs.FORMAT` is what a v0.3 layout bumps.
+- **No guard lifted, no batch added.** The `hub` package stays a `PureSourcesTest` pure package with the same three
+  listed adapters GS-112 named; the eight new classes join the `[pure]` list and `ShippedClassesTest`'s
+  expected-class list, and no check changed. There is no `@GameTest` here, so the worst-case batch budget is
+  unchanged at 5,520 ticks (276 s) over 35 batches.
+- **Tests.** Unit 500 -> 566 in 38 classes: `hub/HubViewModelTest` (45) and `hub/HubDtoCodecTest` (21). In game
+  unchanged at 127 passed / 4 skipped on a fresh world. Negative controls: removing `rebuild`'s second page clamp
+  failed exactly `thePageIsClampedAgainWhenTheListShrinksUnderIt` (`expected: <0> but was: <2>`), and removing
+  `HubCodecs.readString`'s length check failed exactly the two oversize-string cases. Both were reverted and
+  verified with `cmp`.

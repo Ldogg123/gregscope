@@ -129,6 +129,15 @@ class PureSourcesTest {
         // GS-112 (section 9.1): the Telemetry Hub's NBT record and the server-wide open-view cap.
         "hub/HubNbtCodec.java",
         "hub/HubViews.java",
+        // GS-113 (sections 9.2, 9.3): the Hub's data side - the DTOs, their codec seam and the view model.
+        "hub/ByteSink.java",
+        "hub/ByteSource.java",
+        "hub/HubCodecs.java",
+        "hub/HubRow.java",
+        "hub/HubHeader.java",
+        "hub/HubWindow.java",
+        "hub/HubDetail.java",
+        "hub/HubViewModel.java",
         // The settings a LimitsView copies; pure in fact since GS-101, and reached by the bytecode check.
         "config/Settings.java",
         "config/ConfigKeys.java");

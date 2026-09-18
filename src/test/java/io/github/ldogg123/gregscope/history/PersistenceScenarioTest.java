@@ -452,10 +452,7 @@ class PersistenceScenarioTest {
         store.failWrites.set(0);
         long failedCreates = run.history.writesFailed();
         awaitFileWork(run, () -> store.exists(SENSOR), "the file was never recreated");
-        assertEquals(
-            failedCreates + 1,
-            run.history.filesCreated(),
-            "every failed create plus the one that landed");
+        assertEquals(failedCreates + 1, run.history.filesCreated(), "every failed create plus the one that landed");
         assertEquals(
             HistoryFileCodec.Status.OK,
             HistoryFileCodec.inspect(store.history(SENSOR), SENSOR),

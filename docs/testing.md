@@ -13,7 +13,7 @@ Both run on every push and pull request in CI (`.github/workflows/build-and-test
 
 ## Unit tests
 
-Location: `src/test/java`. Run with `./gradlew test` (also part of `./gradlew build`). 500 tests in 36 classes:
+Location: `src/test/java`. Run with `./gradlew test` (also part of `./gradlew build`). 566 tests in 38 classes:
 
 | class | tests | covers |
 |---|---|---|
@@ -53,6 +53,8 @@ Location: `src/test/java`. Run with `./gradlew test` (also part of `./gradlew bu
 | `sensor.RenameCooldownTest` | 5 | GS-111, design-v0.2 §3.5. An unknown player may write at once; a write starts the cooldown for that player only and expires exactly at `renameCooldownSeconds`; the console (null UUID) and `renameCooldownSeconds <= 0` are never limited and the console is never tracked; a clock that went backwards costs one cooldown at most instead of locking the player out until wall-clock time catches up (§6.2); `clear` forgets everyone. |
 | `hub.HubTileNbtCodecTest` | 12 | GS-112, design-v0.2 §9.1. The Telemetry Hub's `gsHub` record over an in-memory `KeyValue`: the four key names and the format are pinned; an owned Hub round-trips; an unowned one writes no owner keys and clears any it had; an empty compound and `null` are ABSENT, and so is a foreign type under the marker or a marker of 0 (no record this project ever wrote); `gsHub` above the format is UNSUPPORTED, parses nothing and leaves the compound untouched, and the marker is read unsigned (200, not -56); half an owner (one of the two longs) is no owner and a valid record all the same; an owner with no cached name is still an owner; the owner name is capped at 16 UTF-16 units on write and on read, the same rule a sensor's owner name follows; writing never touches a foreign key. |
 | `hub.HubViewsTest` | 8 | GS-112, design-v0.2 §9.1 and the `limits.maxOpenHubViews` cap of §12.3. Asking never records anything; the cap counts open views and a closed view frees the slot; a viewer who already holds a view is never refused and never counts twice; closing what is not open changes nothing; a viewer without a UUID can never open; a cap of 0 or less allows nothing new but does not close what is open; `clear` forgets everything; `opened(null)` is rejected. |
+| `hub.HubViewModelTest` | 45 | GS-113, design-v0.2 sections 9.2, 9.3 and 7.5. The Hub's whole data side over a hand-built `TelemetryFrame`, a map-backed `TeamResolver` and a `MinuteRing` the test fills; no world, no MUI2. **Scope:** the rows are the *Hub owner's* team, not the viewer's (an operator opening someone else's Hub sees that Hub's scope and nothing more), an unowned sensor is in no Hub's scope and an unowned Hub shows nothing. **Sort:** the full section 9.2 severity order, one sensor per rank (shutdown, power_starved, output_blocked, waiting, unformed, disabled, MISSING, then healthy machines), IN_ITEM/REMOVED/UNLOADED between the tombstones and the healthy machines, a LIVE sensor that could not be read last, then display name ignoring case, then id. **Filter:** a value outside {0,1} (7, -1, and design-v0.3's 2 and 3) becomes All; switching resets the page; Problems keeps the six problem states and MISSING but not `starting`, `idle`, `running` or UNLOADED; a warning on a LIVE sensor is a problem and a stale warning on an UNLOADED one is not. **Paging:** a short page is padded to eight `HubRow.EMPTY` rows, the list is unmodifiable, the setter clamps -5 to 0 and 999 to the last page, the page is clamped **again** when the list shrinks under it, and an empty Hub still reads page 1 of 1. **Selection:** a row index resolves to a UUID, survives the row resorting to another position, is dropped when the sensor leaves the scope and **kept** when the filter hides it; an out-of-range index or a padding row selects nothing. **Detail:** the snapshot numbers with their age, the last known snapshot of an UNLOADED sensor (which the row deliberately hides), `canEdit` needing rename rights *and* LIVE, a tombstone with no ring, and history that is still loading. **Windows and strip:** the section 7.5 contract end to end (observed samples only, coverage against each slot's own expected count, a window with no coverage having `NaN` rather than 0% uptime), the 24-hour window covering exactly `MinuteRing.SLOTS` minutes, and the hourly strip marking unobserved hours `?` and scaling 100/60/30/10 percent to `#`/`=`/`-`/`.`. **Header:** scope, live and shown counts, the sampler footer and `sensorsAbandoned`. **Throttle:** no rebuild when neither the sequence nor an input changed, a rebuild for each of a new sequence, filter, selection and abandoned count, no rebuild when a setter is handed the value it already holds, getters returning the same reference until a rebuild replaces them, every collaborator required, and `TelemetryFrame.EMPTY` building an empty view rather than throwing. |
+| `hub.HubDtoCodecTest` | 21 | GS-113, design-v0.2 section 9.3. The DTO codecs over a real `DataOutputStream`/`DataInputStream` pair rather than a list of typed values, so a field written in the wrong order or read with the wrong width fails here. Round trips for a full row, the padding row, an owned and an unowned/unsupported header, a window and a full detail with both windows and its strip; a detail with nothing selected is exactly 17 bytes (format plus a zero UUID) and decodes back to `HubDetail.NONE`; absent readings survive as sentinels rather than as zero. Encoding **caps** an overlong name; decoding **rejects** a string over the section 9.3 caps (40 and 128 are both asserted, with the test's `readString` deliberately ignoring the cap it is given so the codec has to do the rejecting), any format byte other than 1 for all four layouts, an unknown availability code and an unknown state code; a filter value off the wire is clamped. The strip values are clamped to -1..100, the hourly array is never shared, an array of the wrong length is refused, the availability codes are pinned to the section 10.1 id order and reversible, capping never splits a surrogate pair, the strip symbol table is pinned and stays ASCII, and a window needs one column per pinned state. |
 
 The unit tests use `TestReadings` fakes and do not load Minecraft, GT or OpenComputers classes (`ShippedClassesTest`
 only reads class files as bytes). What GT actually returns is checked by the in-game tests.
@@ -516,6 +518,40 @@ interval that is 12.8 samples per tick, about 0.2 ms per tick at the EBF's p99, 
 
 ### Last full run
 
+GS-113, local, Windows, 2026-09-17, selector `gregscope`, on a **freshly created world and without
+`config/gregscope.cfg`** (both moved away first): **127 passed, 4 skipped** (`ProbeBenchmarkTests`, opt-in), 0 failed,
+0 timed out, 0 infrastructure errors; Horizon-QA status `PASSED`, exit code 0; Gradle wall time 56 s for `runServer`.
+GS-113 is a pure data ticket: **no in-game test, no batch and no test class changed**, so the in-game totals and the
+per-class breakdown are exactly those of the previous run below, and this run is the regression check that nothing
+the Hub's view model touches (the frame, the registry rings, the access policy) moved under the existing tests. The
+expected `HistoryTests` clock WARN is still the only WARN in the log.
+
+Unit tests: **566 in 38 classes**, all green (500 in 36 before). The 66 new cases are the two GS-113 classes,
+`hub.HubViewModelTest` (45) and `hub.HubDtoCodecTest` (21); no existing test changed, and `PureSourcesTest` and
+`ShippedClassesTest` only gained the eight new class names in their lists.
+`./gradlew --no-daemon spotlessApply` then `clean build`: BUILD SUCCESSFUL, checkstyle and spotlessCheck clean.
+Jar check on `build/libs/gregscope-c5bfdc6-master+c5bfdc6d90-dirty.jar`: **209 entries** (was 194; the 15 new ones are
+the eight GS-113 classes plus `HubCodecs$1`, `HubDetail$1`, `HubDetail$Builder`, `HubViewModel$1`,
+`HubViewModel$Candidate`, `HubViewModel$History` and `HubViewModel$History$1`), 0 matching
+`gametest|horizonqa|.lua|fixtures|.hex|Test.class|tools/|.py`. GitHub CI has not run this state.
+
+**Worst-case batch budget: 5,520 ticks = 276 s** against the 300 s CI step, over the same **35** batches - unchanged,
+because GS-113 adds no `@GameTest`. Recounted with `tools`' budget script after the run.
+
+**GS-113 negative controls (2026-09-17), reverted afterwards (backup copies restored, `cmp` identical).**
+
+- `HubViewModel.rebuild`'s `page = clamp(page, 0, pages - 1)` removed, so a page survives the list shrinking under
+  it. Result: exactly 1 of 566 failed, `HubViewModelTest.thePageIsClampedAgainWhenTheListShrinksUnderIt`, with
+  `expected: <0> but was: <2>` - a viewer left on page 3 of a list that now has one page, which is eight empty rows
+  and no way back except paging by hand.
+- `HubCodecs.readString`'s length check removed, so the decoder trusts the buffer to have enforced the section 9.3
+  cap. Result: exactly 2 of 566 failed, `HubDtoCodecTest.decodingRejectsAnOversizeDisplayName` ("Expected
+  java.lang.IllegalArgumentException to be thrown, but nothing was thrown") and `.decodingRejectsAnOversizeStatusText`
+  (an `UncheckedIOException` off the end of the packet instead of the refusal, which is the same bug one field
+  later). Nothing else noticed, which is the point: no older test reads a Hub DTO.
+
+#### Previous runs
+
 Review follow-ups after GS-112, local, Windows, 2026-09-17, selector `gregscope`, on a **freshly created world and
 without `config/gregscope.cfg`** (both moved away first): **127 passed, 4 skipped** (`ProbeBenchmarkTests`, opt-in),
 0 failed, 0 timed out, 0 infrastructure errors; Horizon-QA status `PASSED`, exit code 0; Gradle wall time 56 s for
@@ -558,8 +594,6 @@ timeout, the worst case does not fit; a normal run takes 51 s in test cases and 
   attempt at this control failed on the test's own `assertNotNull` precondition instead, so the test was reordered to
   run the command first and the control repeated: a frame that cannot answer now fails the way it would fail an
   operator.
-
-#### Previous runs
 
 GS-112, local, Windows, 2026-09-17, selector `gregscope`, on a **freshly created world and without
 `config/gregscope.cfg`** (both moved away first): **126 passed, 4 skipped** (`ProbeBenchmarkTests`, opt-in), 0 failed,
