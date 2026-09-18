@@ -1792,3 +1792,471 @@ machines, still no mixins, ATs or reflection in `src/main`.
   to the accumulator, not through `SampleFolder`, so a clock-skew refusal on that path is still not counted; the core
   is `[pure]` and has no stats seam. It is a counter-only inaccuracy on a path that needs both a strike and a clock
   that went backwards.
+
+### GS-109 (2026-09-17)
+- **Classes.** New in `history/`: the `[pure]` `HistoryFileCodec` (the §8.2 header, its status rules and the 92,224 B
+  geometry), `Crc32`, `SlotLayouts`, `FileStore` (the seam) and `IoListener`, plus the two I/O adapters `NioFileStore`
+  and `HistoryIo`, which `PureSourcesTest.IMPURE` lists on purpose. New in `registry/`: the `[pure]` `RunsTable` and
+  the MC adapter `RegistryNbtCodec` (also listed). §2 names `FileStore`, `NioFileStore`, `HistoryIo`, `RunsTable` and
+  `RegistryNbtCodec`; added and not named there are `Crc32`, `SlotLayouts` and `IoListener`, each for a reason below.
+  `ShippedClassesTest` gained nine expected-class entries and one new check (below).
+- **`FileStore` is `[pure]`, its NIO implementation is not.** The interface names only `java.*` types, so GS-110's
+  `PersistenceScenarioTest` can implement it in memory, which §14 asks for. `NioFileStore` and `HistoryIo` import no
+  game class either (only `java.nio` and `java.util.concurrent`), but §2 lists them as the I/O adapters of the
+  package, and listing them in `IMPURE` is what stops any `[pure]` class from naming them - the boundary stays
+  one-way. Trap found while doing it: `PureSourcesTest` decides what is pure by looking for the literal `[pure]`
+  anywhere in the file, so a class that writes "not [pure]" in its own Javadoc is treated as pure and fails the run.
+  Both adapters now say it in words instead.
+- **`Crc32` is written out instead of using `java.util.zip.CRC32`.** Calling that class puts the member name
+  `update` into the caller's constant pool, and `ShippedClassesTest.noPeriodicWorkHooks` forbids
+  `canUpdate`/`update`/`updateEntity` everywhere to catch tick hooks. A 20-line table is cheaper than weakening that
+  check, and it keeps the §8.2 header checksum independent of the JDK. Its check value (`"123456789"` gives
+  `0xCBF43926`) is asserted in the unit test and in `tools/gen_fixtures.py`.
+- **"No threads" is lifted for exactly one class (§1.4).** `history/HistoryIo` and its inner classes are the only
+  shipped classes allowed to name `java.lang.Thread`; timers, executors, event buses, world generators and tile entity
+  registration stay forbidden for them too. The new `ShippedClassesTest.theOnlyThreadIsTheIoThread` checks the lift is
+  not vacuous (`HistoryIo` really names `Thread`, calls `setDaemon` and carries the string `GregScope-IO`) and that
+  `NioFileStore` does **not** name `Thread`. That is why the `-ea` check is a `BooleanSupplier` supplied at
+  construction (`HistoryIo::onIoThread` in production) rather than a `Thread.currentThread()` call in the store: one
+  lift, one class, and a unit test can drive both answers.
+- **The `-ea` check, and what it does not cover.** §14 wants "the server thread does no file I/O (`NioFileStore`
+  asserts the thread name under `-ea`)". Every method asserts it **except the two registry reads**: §2 loads the
+  registry in `serverStarting`, before the world runs, and §8.4 lists no `ReadRegistry` task, so those two are the
+  documented synchronous exception. The check is only as good as the JVM's assertion setting, and the dev
+  `runServer` runs **without** `-ea` (observed: the in-game test logged "assertions are off"). `addon.gradle` now
+  passes `-ea:io.github.ldogg123.gregscope...` to `runServer`/`runClient`, scoped so Forge, GT, MUI2 and MC keep
+  running as they ship. `NioFileStore`'s check is the only `assert` in `src/main`.
+- **Header rules, where §8.2 leaves a gap.** §8.2 names "`formatVersion > 1`" as unsupported. A version that is not 1
+  at all (0, say) is no version this project ever wrote either, and the conservative action for anything unreadable is
+  to rename rather than overwrite, so `inspect` treats **any** `formatVersion != 1` as `UNSUPPORTED`, and so are a
+  `slotSize`/`slotCount` that are not 64/1440 and a `sensorKind`/`slotLayout` pair that do not belong together (a
+  kind-1 file with layout 2 is renamed, never reinterpreted). A file whose length is not exactly 92,224 B is
+  `CORRUPT`, like bad magic or a bad header CRC. Nothing is ever deleted: `.corrupt-<epochMs>`, `.unsupported-v<N>`
+  and `.mismatch`, and a quarantine name that is taken gets a `-1`, `-2`, ... discriminator.
+- **A slot write never creates a file.** `NioFileStore.writeSlot` checks the file is present and exactly 92,224 B
+  before opening it, and throws otherwise. `RandomAccessFile("rw")` would otherwise create a headerless, sparse file
+  on the first write after a `CreateFile` task was dropped by a full queue.
+- **What the I/O thread reports, and to whom.** `HistoryIo` talks to the rest of the mod through the `[pure]`
+  `IoListener` rather than calling `SamplerStats` and the logger directly, so it stays unit-testable in a plain JVM
+  and the §7.6 counters keep one owner. `GregScope.IoStatsLog` is the shipped implementation: `onQueued`/`onDropped`
+  run on the server thread and write `SamplerStats` directly, while `onError` runs on the I/O thread, so its count is
+  parked in an `AtomicLong` and folded in from the next server-thread callback. The 10-minute drop-warning window
+  lives in `HistoryIo` over an injectable nanosecond clock, which is what makes it testable.
+- **Minimal glue that GS-109 wires, and what it deliberately does not.** §2's load-phase table puts "resolve the save
+  root, load the registry, start I/O" in `serverStarting` and "join I/O" in `serverStopped`. GS-109 wires the
+  *service*: `GregScope.saveRoot()` (`DimensionManager.getCurrentSaveRootDirectory()` plus `/gregscope`), the
+  `NioFileStore`, the `HistoryIo` start/stop with its listener, the `flushIo` test hook, and the §7.8 startup INFO
+  line, which had no caller until now. Loading `registry.dat`, appending the run, the slot writes, the async loads,
+  the retention deletes and the saves stay with GS-110, which is what §14 scopes to it. With
+  `history.persist=false` no store and no thread are created at all, so everything GS-110 will queue is simply not
+  queued.
+- **The runs table enforces its own load order.** The GS-110 follow-up "call `GapRanges.Run.stopOnLoad` for every
+  stored run at registry load, before appending the new run and before any save" is structural here rather than a
+  rule to remember: `RunsTable.loaded(rows, saved)` applies `stopOnLoad` while decoding, and `RegistryNbtCodec.decode`
+  is the only way to build a table from a file, so appending the new run first is not expressible.
+- **design-v0.3 GS-201 hooks this ticket touches.**
+  - **A3 (`RegistryNbtCodec` keeps unknown kinds).** An entry whose `kind` this build does not register is never
+    decoded into a `SensorEntry`: it is kept as a verbatim `NBTTagCompound` in `Loaded.preserved()`, so it is not
+    counted, sampled or expired, its `.gsh` is never opened, and it is written back unchanged. The same holds for keys
+    this build does not define, on the root compound and on entries it does understand, so a v0.3 to v0.2 rollback
+    loses nothing. The golden fixture carries a kind-1 entry with `tier`/`lastIo`, an unknown root key and an unknown
+    entry key, and the in-game test asserts all of them survive a decode/encode round.
+  - **A5 (`SlotLayout` strategy).** Only the part GS-109 needs: `SlotLayouts` pins the layout codes (1 machine, 2 item
+    flow, 3 fluid flow), the kind/layout pairing and which layouts this build can read, which is what the §8.2 header
+    validation asks for. The strategy itself (`id()`, `validate`, `merge`, the `MinuteHeader` view,
+    `MinuteRing(SlotLayout)`) belongs to the history refactor, not here.
+- **Fixtures.** `tools/gen_fixtures.py` gained the four `gsh_header_*.hex` headers and `registry_v1.nbt.gz.hex`, a
+  whole gzipped-NBT `registry.dat` written without any NBT library (gzip `mtime=0`, so re-runs are byte-identical).
+  The GS-103 fixtures regenerate unchanged. `addon.gradle` copies `src/test/resources/fixtures/v1` into the gametest
+  resources, so the in-game test reads the same file the unit tests do instead of a second copy that could drift.
+- **A new Horizon-QA batch has to be named with the reload tests in mind (GS109-T1).** Horizon-QA runs batches
+  alphabetically, hands out cells as tests start, and keeps finished cells loaded. The batch was first called
+  `gregscope.persistence`, which sorts **before** `gregscope.reload.*`: its `v2Unsupported` cell landed at (0, 48), in
+  the same chunk as `ChunkReloadTests.basicMachineSurvivesChunkReload` at (8, 48), and that test failed on two fresh
+  worlds. Renamed to `gregscope.storage`, which sorts last, every older test keeps the cell it always had and the
+  suite is green. The worst-case suite time is now 3,720 ticks (186 s) over 27 batches against the 300 s CI step -
+  recounted mechanically from all 89 `@GameTest(` annotations, which also showed the 4,220 recorded after GS-108 was
+  itself too high (the 26 pre-GS-109 batches sum to 3,520).
+- **Observed and unresolved: the chunk-reload tests are wall-clock sensitive.** Besides the two failures the batch
+  name explains, two runs of the deliberately broken negative-control build failed a different reload test each,
+  although removing an `assert` cannot affect chunk loading. All three runs of the final state were green and every
+  older log in this project shows these tests passing. Recorded in `docs/testing.md` as an observation to watch in CI,
+  not as a diagnosis.
+
+### GS-110 (2026-09-17)
+- **Classes.** Three new shipped classes. `history/HistoryPersistence` owns the `.gsh` half of section 8 (which file
+  exists, when it is read, what is written into it, when it is deleted) and is the registry's `RegistryEvents`
+  delegate; `registry/RegistryPersistence` owns `registry.dat` (load, append this run, save); `GregScopeWorldEvents`
+  carries the two Forge-bus hooks sections 8.3 and 8.4 name. Section 2 names none of the three: the section lists the
+  data classes of each package, and the two services are the wiring between them, which §14 scopes to this ticket;
+  the event hook could only live in the root package next to `GregScope`, because it is mod-lifecycle glue. Neither
+  service imports a game class, but both are listed in `PureSourcesTest.IMPURE`, because each names an adapter
+  (`HistoryIo`, `RegistryNbtCodec`) and the listing is what stops a `[pure]` class from naming *them*. The GS-109 trap
+  applies again: `HistoryPersistence` says "not one of the pure ones" in words, because `PureSourcesTest` treats the
+  literal marker anywhere in a file as a claim of purity.
+- **A second event subscriber, and how narrow the lift is.** Section 8.3 saves "on dim-0 `WorldEvent.Save`" and
+  section 8.4 makes dim-0 `WorldEvent.Unload` a shutdown trigger. Both are on the **Forge** bus, which
+  `ShippedClassesTest` forbade everywhere (section 1.4 lifted "no global tick handler" for `TelemetrySampler` only,
+  and that lift does not include `MinecraftForge`). `GregScopeWorldEvents` is the one deliberate second lift: it may
+  name `MinecraftForge`, its bus type and `SubscribeEvent`, and nothing else on the periodic-work list.
+  `theOnlyWorldEventHandlerIsThePersistenceHook` checks the lift is not vacuous (it really names all three, and both
+  `WorldEvent$Save` and `WorldEvent$Unload`), that it does **not** subscribe to `WorldEvent` itself, and that no other
+  shipped class reaches the Forge bus. `IdleCostTests` now expects exactly one GregScope listener on
+  `MinecraftForge.EVENT_BUS` instead of zero, and `exactlyTwoWorldEventHandlers` pins the two handler signatures.
+  **Two methods, not one taking `WorldEvent`:** `WorldEvent.PotentialSpawns` is a `WorldEvent` too and fires several
+  times per chunk per tick, so a base-class handler would put GregScope on a hot path.
+- **`history.persist=false` still saves the registry - GS-109's note is corrected here.** Section 8.4's last bullet
+  reads "no `.gsh` files, RAM rings only. **The registry is still saved.**" GS-109 decided that with
+  `history.persist=false` no store and no I/O thread would be created at all, which was consistent then (nothing
+  queued anything) but makes that sentence impossible now. `startIo()` therefore always creates the store and the
+  thread when there is a save root, and `HistoryPersistence` reads the flag live from `Settings` on every call and
+  writes no `.gsh`. The `history.persist` config comment said "Write minute history **and the registry**"; it now says
+  "Write minute history files under `<world>/gregscope/history/`. The registry is saved either way." Evidence:
+  `PersistenceScenarioTest.persistFalseWritesNoHistoryFile` (the store stays empty, the ring still holds the history)
+  and `HistoryTests.persistFalseWritesNoGsh` (no `.gsh` on the running server, `registry.dat` written).
+- **One `HistoryIo` task kind that section 8.4 does not list: `QuarantineRegistry`.** Section 8.3 renames a `v > 1`
+  `registry.dat` aside, and renaming is file I/O like any other: `NioFileStore.quarantineRegistry` asserts the I/O
+  thread under `-ea`, so doing it on the server thread would trip GS-109's own check. It is queued instead. The
+  `.bak` is deliberately left alone, which `NioFileStoreTest` already pinned; a `.bak` that is also v2 is re-read once
+  after a crash, found unsupported again, and the world starts empty - no data loss, no growth.
+- **The order in `serverStarting`, and why it is that order.** `startServices()` runs: the store and the I/O thread
+  first (everything below queues work on them); then the registry and `registry.dat`, where `RunsTable.loaded`
+  closes every unclean run at the stored `saved` *before* `startRun` appends this one (section 8.3 - and GS-109 made
+  that structural, so `RegistryPersistence.load` cannot get it wrong); then the sampler with the history service
+  behind it, so an expiry in the next step already deletes the file it should; then housekeeping, which drops what is
+  too old before its history is ever read; then the history reads for what survived. `serverStopping` closes every
+  open accumulator as a partial slot, stops the run and queues the registry write **regardless of `dirty`**
+  (GS-107-04: `seen` never marks it dirty); `serverStopped` flushes and joins. Both halves are idempotent and are
+  also what the overworld's `WorldEvent.Unload` calls.
+- **Exactly one slot write per closed minute per sensor.** The registry core already funnels every closed minute
+  through `storeSlot` -> `RegistryEvents.minuteClosed`, so the rule is structural: `HistoryPersistence` writes one
+  64-byte slot per call and counts both sides (`minutesClosed()` and `slotsWritten()`), which is what makes the
+  criterion checkable rather than asserted by eye. The one case where a minute closes before there is a file to write
+  it into - between the `Load` and its result - is handled by remembering the ring index and writing it once the file
+  is there, or, past 64 such minutes, by rewriting the whole file from the ring. "No writes while UNLOADED" needs no
+  code: an UNLOADED entry has no open minute, so nothing closes.
+- **What a load result does.** Absent, or quarantined by `HistoryIo` because the file was corrupt, unsupported or
+  foreign: a fresh file is written from the **whole ring**, so minutes recorded before the file existed are not lost.
+  A whole matching file: `MinuteRing.mergeLoaded` merges it with RAM winning (section 8.4), and the accumulator is
+  told the newest merged minute so a clock that went backwards cannot reopen a minute that is already on disk. Either
+  way the entry is marked `historyLoaded` (the Hub's "loading history..." gate, GS-113). A result for an entry that
+  became a tombstone meanwhile is discarded and counted.
+- **New registry-core API, all of it `[pure]`.** `runs()`/`setRuns()` (the runs table belongs to the state machine,
+  because the §7.5 reader contract needs it), `gapContext(id, now)` (rule 3 in one place: the resolved runs plus what
+  the registry knows about an UNLOADED sensor), `restore(entry)` (a decoded entry back into both indexes, no caps
+  consulted, nothing marked dirty, no event fired - loading is not a transition) and `flushOpenMinutes()` (section
+  8.4 at stop; no gap reason, because the minute really was observed and the seconds after it are `server_offline`
+  by the runs table).
+- **A restart in one JVM.** `GregScopeTestHooks.simulateRestart()` is the hook §14 asks for; it is the pair
+  `stopServicesNow()` + `startServicesNow()`, which are also exposed separately so a test can move its fake clock
+  between the two and produce real downtime (otherwise there is nothing for rule 3 to attribute). A third new hook,
+  `applyHistoryLoadsNow()`, drains the finished reads without taking a sample - `runIntervalNow()` would take one, and
+  a stray sample makes a minute 61 samples long.
+- **Two in-game facts the run log forced.**
+  - *The fake clock must be in the **future**.* `RunsTable.stopRun` clamps with `Math.max(start, now)`, and the run
+    this process started was stamped with the **system** clock. A fake clock in the past therefore closed the run at
+    its own start, not at the fake stop, and the restart test's runs-table assertion failed. The base time is now
+    2033-05-18T03:34:00Z, on a minute boundary.
+  - *Two chunk-unload tests must not share a batch.* Horizon-QA runs the tests of one batch together and hands out
+    neighbouring cells, which can share a chunk: on a fresh world the cells were (0, 88) and (8, 88), both in chunk
+    [0, 5], and the second test's setup loaded the chunk the first had just unloaded - the first then saw its sensor
+    still LIVE, and the second found its own chunk already gone. Each now has its own batch, which is what the older
+    reload tests already do. Both also compare the sensor's own file before and after instead of a global counter,
+    because other cells keep heartbeating while a test idles a tick.
+- **Horizon-QA `mode=ci` never runs the server-stop path.** The run ends with `FMLCommonHandler.exitJava`: the JVM
+  shutdown hook runs `MinecraftServer.stopServer()`, but FML posts neither `FMLServerStoppingEvent` nor
+  `FMLServerStoppedEvent`, and dimension 0 is never unloaded through `WorldEvent.Unload`. No automated test can
+  therefore observe the real shutdown. What is covered instead: the bodies those handlers call, through
+  `stopServicesNow()`/`startServicesNow()` in `simulatedRestartRestoresHistory`; and the save trigger, through
+  `overworldSaveWritesTheRegistry`, which posts a real `WorldEvent.Save` on the real Forge bus. A real `/stop` and
+  restart stays the §14 manual item (M) and is on the GS-121 checklist.
+- **Known inaccuracy: the unloaded *reason* is RAM only.** `gapContext` picks between `chunk_unloaded` and
+  `dimension_unloaded` from `SensorEntry.lastGapReason`, which section 4.1 keeps in RAM and section 8.3 does not
+  persist. A sensor whose **dimension** was down when the server stopped therefore reads `chunk_unloaded` for the
+  minutes after a restart, until it is sampled again. It is a label on an already-correct gap, on a path where the
+  minutes in question are `server_offline` anyway (rule 3 checks the runs first), so no field was added to
+  `registry.dat` for it; recorded here rather than fixed.
+- **design-v0.3 GS-201 hooks this ticket touches.** A3 only: every save writes back the `Preserved` compound the load
+  produced, so an entry of a kind this build does not register, and any key it does not define, survive a v0.3 to
+  v0.2 round trip on a running server. `RegistryPersistence` holds that object for the life of the run and logs how
+  many foreign entries it is carrying. No part of A5 was needed beyond what GS-109 already pinned.
+
+### GS-111 (2026-09-17)
+- **`/gregscope` cannot be "level 0" the way section 11 words it - this is a reality correction.** In 1.7.10
+  `EntityPlayerMP.canCommandSenderUseCommand(level, name)` returns **false for every player who is not on the ops
+  list, at any level, level 0 included** (`EntityPlayerMP.java:1077-1098`; only `tell`, `help`, `me` and
+  single-player `seed` are special-cased), and `CommandHandler.executeCommand` gates on
+  `ICommand.canCommandSenderUseCommand(sender)` (`CommandHandler.java:53`), whose `CommandBase` default is exactly
+  that call. Registering the command with `getRequiredPermissionLevel() == 0` therefore hides it from ordinary
+  players, which is the opposite of section 11's "any player" rows. `GregScopeCommand.canCommandSenderUseCommand`
+  returns **true** and every decision is made per subcommand through `AccessPolicy`. The vanilla check is still what
+  decides who is an op: the `Viewer` an `ICommandSender` becomes asks
+  `player.canCommandSenderUseCommand(permissions.opLevel, "gregscope")`, which is the adapter form GS-104 already
+  prescribed. This is the same errata-E4-shaped fact `Viewer`'s Javadoc records for `AccessPolicy.isOp` with
+  `opLevel=0`; section 11's table is unchanged in meaning, only its "level 0" phrasing is.
+- **A stranger's `label` answers "no sensor matches", not "you are not allowed".** With the default
+  `permissions.renameRequiresOfficer=false`, section 5 makes `canRename` and `canView` allow exactly the same people
+  (owner, same team, op), so a viewer who fails `canRename` has already failed `canView` and the prefix never
+  resolved for them. The `canRename` branch is reachable only with `renameRequiresOfficer=true`, where a plain team
+  member can see a sensor and not rename it. Both are asserted: `CommandTests.labelDeniedForStranger` (not found)
+  and `labelDeniedForNonOfficerWhenConfigured` (denied, then allowed once the team makes them an officer).
+  Deliberately not "fixed" by leaking the existence of a sensor a viewer may not see.
+- **Two classes, plus one section 2 does not name.** Section 2 lists `command/ GregScopeCommand; [pure] CommandArgs`,
+  and that is what shipped. `sensor/RenameCooldown` is the third: section 3.5 requires a per-player cooldown for
+  **every** label write and lists three surfaces, so the cooldown belongs beside the label rules rather than inside
+  one surface; `SensorRegistry` owns one instance for the server run and GS-114's Hub field will use the same
+  `writeLabel` entry point. `CommandArgs` also holds the pure text helpers section 11's output needs (`age`,
+  `bytes`, `percent`, the id-prefix normalizer, the paging arithmetic and the seven-day `isStale` rule), so they are
+  unit-tested rather than hidden in the adapter.
+- **The label write is one shared service, and it is kind-agnostic.** `SensorCover` gains `setLabel(String)` (the
+  design-v0.3 section 5.1 A2 hook: a v0.3 meter is labelled the same way), `SensorRegistry.liveCover` now returns
+  `SensorCover` instead of `MachineSensorCover` and checks the cover's **kind and UUID** as well (A2 again), and
+  `SensorRegistry.writeLabel(id, rawText, player)` is the one place that applies section 3.5: reject over
+  `Labels.MAX_INPUT_UNITS` before sanitizing, require LIVE, resolve the cover without loading a chunk, write the
+  cover NBT and `markDirty()`, mirror the label into the entry, mark the registry dirty, and only then charge the
+  cooldown. The caller asks `AccessPolicy.canRename` first, because only the caller knows who is asking.
+- **Decisions section 11 leaves open, made here and worth knowing.**
+  - **`list` is ordered by sensor UUID.** Section 11 fixes the columns and "10 per page" but not the order; ordering
+    by id is the only order that keeps page 2 meaningful while sensors come and go, and it is the order
+    `TelemetryFrame` already uses.
+  - **`stats` sensor counts are filtered by `canView`; the machine-health numbers are not.** Section 5 puts `stats`
+    in the same row as `list` and `info`, so the per-state counts are the viewer's. The histogram quantiles, the
+    work and I/O counters and the RAM/disk estimates are server-wide facts about the server, not about anyone's
+    sensors, and are shown to everyone. The RAM/disk estimate is derived from the whole registry for the same
+    reason.
+  - **`purge --stale` uses section 11's seven days, not `history.staleExpiryDays` (30).** `list stale` defines
+    "stale" as UNLOADED for more than seven days; `purge --stale` removes exactly what `list stale` shows. The
+    30-day setting stays what housekeeping expires by itself.
+  - **The values inside a line are data, not translated text.** Section 11 says the output uses
+    `ChatComponentTranslation` keys, and every line is one (`gregscope.cmd.*`, all new in `en_US.lang` and covered
+    by `AssetsExistTest` through the `LANG_CMD_*` constants). Inside a line, states, gap reasons and sensor kinds
+    travel as their stable ids (`live`, `server_offline`, `machine`) - the same ids OpenComputers and the section
+    16.2 exporter model use - so a script that reads chat sees the same words on every client. The section 12.2
+    `gregscope.state.*` and `gregscope.gap.*` keys are still there for the Hub (GS-114), which renders them.
+  - **An ambiguous prefix counts every match and lists five.** The message says how many there really are; stopping
+    the scan at six would have printed a number that is a listing limit rather than a count.
+- **`info` is the first consumer of `historyLoaded()` and `gapContext()`.** GS-110's notes predicted GS-113 would
+  be; `info` needs both (the "history is still loading" line, and rule 3 for the 24 h gap line), so that prediction
+  is corrected here. `info` is also the first shipped caller of `Summaries.minutes`.
+- **No `ShippedClassesTest` guard was lifted.** The command needs none: `CommandBase` is not on the periodic-work
+  list, the command registers itself through `FMLServerStartingEvent.registerServerCommand` rather than
+  `GameRegistry`, and it declares no member named `update`/`canUpdate`/`updateEntity`. `PureSourcesTest` gains the
+  `command` package as a **pure package** with exactly one listed adapter (`command/GregScopeCommand`), and
+  `CommandArgs` and `sensor/RenameCooldown` join the `[pure]` list.
+- **Two in-game facts the test senders forced.** `FakePlayer` does **not** override `addChatMessage(IChatComponent)`,
+  only `addChatComponentMessage`, so `EntityPlayerMP.addChatMessage` runs and dereferences a null
+  `playerNetServerHandler`: a plain fake player cannot receive command output at all. And
+  `FakePlayer.canCommandSenderUseCommand` is hard-coded to false, so it can never be an op. `CommandSenders.Player`
+  overrides exactly those two. The console side is a stub `ICommandSender` rather than `MinecraftServer`, because
+  `MinecraftServer.addChatMessage` logs every line and one of the assertions is that a call logs nothing.
+- **Batches and the CI budget.** The three new batches are named `gregscope.surface.command*`, which sorts after
+  `gregscope.storage.*` and therefore after every batch that unloads a chunk, so the GS-109 cell-shifting trap is
+  avoided by construction; the one chunk-reload test and the one chunk-unload test have a batch each (GS-110 rule).
+  All three take Horizon-QA's **default 100** `timeoutTicks` rather than 200, because every test runs to completion
+  inside one server tick apart from a single `thenIdle(1)`. Worst case is now **4,620 ticks = 231 s** of the 300 s
+  step, over 33 batches; measured, the three batches together take 0.2 s.
+- **A negative control that was vacuous, and why.** The first attempt at "a label write never loads a chunk" removed
+  only `writeLabel`'s `state() != LIVE` early return; the suite stayed green, because `liveCover` carries its own
+  LIVE check and returned null before touching the world. The control only bites once every guard in front of
+  `World.getTileEntity` is gone - `liveCover`'s LIVE check and its `blockExists` check as well - and then
+  `labelRefusedWhenUnloadedAndChunkStaysUnloaded` fails on the write succeeding, which is also the positive evidence
+  that `World.getTileEntity` really loads an unloaded chunk. Recorded because a control that passes proves nothing
+  and it is easy to stop there.
+- **The `statsCommandRuns` name.** Section 14 lists this test under GS-111 as `statsRuns`, while the GS-108 notes
+  deferred it under the name `statsCommandRuns`. It is one test; it ships under the name the deferral recorded.
+
+### GS-112 (2026-09-17)
+
+**Scope.** Section 9.1 only: the `gregscope:telemetry_hub` block, its default `ItemBlock` and its non-ticking tile
+entity, the owner set on place, the NBT record, and the server-side checks a right-click makes. GS-114 owns the GUI,
+so a permitted right-click opens nothing yet.
+
+- **Classes section 2 does not name.** Section 2 lists `hub/` as `BlockTelemetryHub`, `TileTelemetryHub`, `HubPanel`
+  and the pure view model. GS-112 adds three more: `hub/HubNbtCodec` (the pure `gsHub` record over the existing
+  `KeyValue` seam, so the tile entity's format is unit-tested the way `SensorNbtCodec` is), `hub/HubViews` (the pure
+  open-view register the section 9.1 cap needs, which GS-114 will drive from the panel) and `hub/TelemetryHubs` (the
+  registration class, the one that may name `GameRegistry` for a block; `SensorCovers` is its precedent). The `hub`
+  package joins `PureSourcesTest.PURE_PACKAGES`, with `BlockTelemetryHub`, `TileTelemetryHub` and `TelemetryHubs`
+  listed as its deliberate Minecraft adapters.
+- **`sensor/NbtKeyValue` and `SensorIdentity.capOwnerName` became public.** The Hub stores an owner and an owner name
+  in NBT, exactly as a sensor cover does, so it reuses the same adapter and the same 16-unit cap instead of growing a
+  second copy of either. Both stay where they are; only their visibility changed.
+- **The `ShippedClassesTest` lift, and its shape.** Section 1.4 lifts "no blocks, no tile entities" for v0.2, so the
+  guard is lifted for **exactly one** class each way. `hub/TileTelemetryHub` is the only shipped class that may extend
+  `TileEntity` or name `canUpdate`; `update` and `updateEntity` stay forbidden there too, and
+  `theOnlyTileEntityIsTheHub` fails if it ever stops extending `TileEntity` or stops declaring `canUpdate` (so the
+  skip cannot pass vacuously) or if any other class extends `TileEntity`. The `GameRegistry` allowlist changed from a
+  set of classes with one shared set of allowed `register*` names to a **map from class to its own set**:
+  `sensor/SensorCovers` keeps `registerItem`/`registerCover`, `hub/TelemetryHubs` gets
+  `registerBlock`/`registerTileEntity`, and neither can make the other's call. `registerWorldGenerator` and
+  `registerTileEntityWithAlternatives` stay forbidden everywhere.
+- **`TelemetryHubs.install`, not `register*`.** The reader sees constant pools and cannot tell a declared method name
+  from a called one, so a method here named `registerBlock` would put that name into **every caller's** constant pool
+  (`GregScope` first) and widen the lift past this class. The entry point is therefore `install(CreativeTabs)`. That
+  `GameRegistry` is really called is still checked: `TelemetryHubs` must name `registerBlock` and `registerTileEntity`
+  and nothing else starting with `register`.
+- **Deviation: one block texture, not three.** Section 9.1 wants `telemetry_hub_front/side/top`. Per-side icons need
+  `Block.registerBlockIcons(IIconRegister)` and `Block.getIcon(int, int)`, and both are `@SideOnly(CLIENT)` in 1.7.10
+  (`mc/net/minecraft/block/Block.java:1469-1470` and `:651-652`; `IIconRegister` is
+  `net.minecraft.client.renderer.texture.IIconRegister`), so the shipped block would have to name a client class and
+  `ShippedClassesTest.noClientClassReferences` would have to be lifted. GS-112 does not lift it: `tools/gen_textures.py`
+  generates and commits all three PNGs, `GregScopeAssets` pins all three names (so `AssetsExistTest` covers them), and
+  the block asks for `telemetry_hub_side` through `setBlockTextureName`, which is not client-only and which
+  Minecraft's own `registerBlockIcons` reads. The Hub therefore renders with one texture on every face for now.
+  GS-114 already needs the section 1.4 client lift for `createScreen`, and wires the front and top icons there.
+- **Deviation: the view cap is checked, not held.** Section 9.1's order is access, then the open-view cap, then
+  `GuiFactories.tileEntity().open`. With no `IGuiHolder` yet, calling `open` would throw inside MUI2
+  (`TileEntityGuiFactory.getGuiHolder` requires one), so GS-112 stops after the two checks. It asks
+  `HubViews.canOpen` and deliberately does **not** call `opened`: reserving a slot for a window that never opens would
+  let a player consume the server-wide cap by right-clicking, 32 clicks to lock everyone out until a restart. The
+  register is therefore always empty in production until GS-114 calls `opened`/`closed` around the real panel, and the
+  in-game test drives the busy path by calling `opened` itself. `GregScope.stopServices` clears the register, so a
+  single-player world switch starts at zero.
+- **An unsupported Hub is operator-only.** A tile entity whose `gsHub` is newer parses no owner (that is what
+  "verbatim" means), so `AccessPolicy.canOpenHub` sees a null owner and only an operator gets in. That follows
+  section 5's unowned rule and is the conservative answer; GS-114's GUI still has to say "unsupported".
+- **Facing.** Metadata 2..5 from the placer's yaw, with vanilla's own mapping (`BlockFurnace`: quadrant 0 -> 2 north,
+  1 -> 5 east, 2 -> 3 south, 3 -> 4 west), set with `setBlockMetadataWithNotify` in `onBlockPlacedBy`, which does not
+  disturb the tile entity. Nothing reads the facing yet; it is stored so GS-114 and v0.2.1 hull icons can.
+- **A real player was needed in the gametests.** Every existing in-game helper places blocks as a `FakePlayer`, and
+  GregScope treats a FakePlayer as "no attributable player" on purpose, so a FakePlayer can never produce the
+  **owner** half of "owner set on place". `CommandSenders` gains `Real`, an `EntityPlayerMP` built exactly the way
+  Forge's `FakePlayer` builds itself minus the overrides that make one fake, with the same recorded chat and a chosen
+  permission level.
+- **`IdleCostTests` changed deliberately.** `noGregScopeListenersTileEntitiesOrGenerators` used to assert that no
+  GregScope class is in the tile entity registry; it now asserts **exactly one**, `TileTelemetryHub`, counted over
+  distinct class names (`TileEntity` keeps a name->class and a class->name map, so the same class appears twice - the
+  first attempt at this assertion failed with "expected 1 but found 2"). The "zero GregScope tile entities loaded in
+  any world" half is unchanged and still holds, because `World.addTileEntity` and `World.setTileEntity` only add a
+  tile whose `canUpdate()` is true (`mc/net/minecraft/world/World.java:4405-4412` and `:2834-2841`). `HubBlockTests`
+  asserts the same thing about a Hub it has just placed, which is the assertion that fails when `canUpdate` lies.
+- **GS-201 hooks.** None of design-v0.3 section 5.1's amendments touch the Hub block or tile entity: A1-A6 are about
+  the registry, the sampler and the slot layouts, and the Hub's own v0.3 additions (the `kind`/flow columns and the
+  `gs_filter` values 2 and 3) belong to `HubRow`/`HubViewModel`, which is GS-113. The v0.3-relevant surface built here
+  is only the one section 9.1 freezes: the registry names, the `gsHub` record with its verbatim-preservation rule (a
+  v0.3 Hub that stores more keys can be rolled back), and the `HubViews` seam GS-114 will drive.
+- **Batches and the CI budget.** Two new batches, `gregscope.surface.hub` and `gregscope.surface.hub.reload`, both at
+  Horizon-QA's default 100 `timeoutTicks`; the reload test has its own batch (GS-110 rule) and the names sort after
+  `gregscope.surface.command*`, so no older test's cell moved. Worst case is now **4,820 ticks = 241 s** of the 300 s
+  step over 35 batches, 59 s of headroom; measured, the two batches together take 0.10 s.
+
+### Review follow-ups after GS-112 (2026-09-17)
+
+Nine findings from an adversarial review of GS-109 to GS-112 were applied in one pass. No ticket scope changed; every
+change is either a failure path that had no answer, a guard that was missing, or a test that could pass while the
+thing it names was broken.
+
+**1. A load that threw stranded its sensor for the rest of the run (GS-109, `HistoryIo`/`HistoryPersistence`).**
+`perform()` caught `Throwable`, counted it and returned, so a `Load` that threw produced no `LoadResult` at all. On
+the server side the sensor stayed `FileState.REQUESTED` with `loadQueued = true`, and `retryDroppedLoads()` only
+re-queues a load the *queue* dropped, never one that was accepted and then failed. Nothing reset the flag: the sensor
+kept `historyLoaded() == false` (so the Hub and OpenComputers would say "loading history" for ever), every closed
+minute only went into `pending`, and not one slot was written for the rest of the run. One transient read error - on
+Windows a virus scanner or backup agent holding `<uuid>.gsh` open for a moment is the everyday case - was enough.
+Now `HistoryIo` answers every task that throws: a failed load becomes a `LoadResult.failed()`, which is deliberately
+**not** `absent()`, because `HistoryPersistence.apply()` turns an absent file into `createFrom()` and a fresh image
+written over a file that may be whole is the one irreversible mistake available here. `apply()` maps a failed result
+to "stay REQUESTED, `loadQueued = false`", so the next drain asks again.
+
+**2. A create or slot write that threw left the sensor believing in a file that was not there (GS-110).**
+`createFrom()` sets `PRESENT` before queueing and only reverts it when the *queue* refuses the task, so a
+`CreateFile` that failed on disk (a full disk, an unwritable `history/`) left every later minute queueing a
+`WriteSlot` into nothing: one `NoSuchFileException` per sensor per minute, logged with a full stack trace and no rate
+limit at all - about 15,000 stack traces an hour at `limits.maxSensors=256`, which on the disk-full variant makes the
+original problem worse. `HistoryIo` now parks such failures in `drainWriteFailures()`, drained by
+`HistoryPersistence.drain()`, which sends the sensor back to REQUESTED with the whole-ring sentinel: the file is read
+again and then rewritten in full, so the minutes recorded meanwhile are not lost either. `GregScope.IoStatsLog.onError`
+is rate-limited exactly like the drop warning (`HistoryIo.DROP_WARN_INTERVAL_NANOS`, 10 minutes), carrying the number
+of failures it left out.
+
+Both retries are bounded by `HistoryPersistence.MAX_FILE_FAILURES` (5). A file that fails every time is given up on
+for the rest of the run and counted in `sensorsAbandoned()`; its ring still holds the history, and nothing is ever
+written over a file that could not be read. Retrying for ever was the alternative and would have produced the same
+unbounded error stream this fix removes.
+
+**3. An abandoned I/O thread must not share its save root (GS-110, `GregScope`).** When `HistoryIo.stop()` timed out,
+`stopIo()` logged a WARN and dropped the reference - but the worker was never interrupted and kept draining its queue,
+and the next `startServices()` built a second `NioFileStore` and `HistoryIo` over the same folder. Both write the same
+fixed `registry.dat.tmp` (and `<uuid>.gsh.tmp`), and the `-ea` check could not see it either, because `onIoThread()`
+compares the thread *name* and both workers carry it. Two interleaved writes into one temporary file, moved onto
+`registry.dat` and copied to `registry.dat.bak` at the next save, would take out the whole registry and the runs
+table - the one mitigation section 8.3 has. `stopIo()` now keeps the abandoned worker, and `startIo()` interrupts and
+joins it first (`HistoryIo.terminate`); if it still will not go, the new run logs an ERROR and keeps everything in RAM
+rather than writing beside it. A task interrupted mid-write ends in `ClosedByInterruptException`, which is reported
+like any other failure, so nothing half-written is moved into place.
+
+**4. The last drain before the poison (GS-110, `GregScope.finalizeServices`/`stopIo`).** `finalizeServices()` closed
+every open minute without first applying finished loads, and `drain()` is only called by the sampler on an interval
+boundary. A sensor whose result was parked at that moment stayed REQUESTED, so `flushOpenMinutes()` only added ring
+indexes to `pending` and the whole-file image that would have saved them was never queued. `finalizeServices()` now
+drains first, and `stopIo()` drains once more after a short bounded flush (`FINAL_DRAIN_FLUSH_MILLIS`, 2 s) and
+before the poison, so a load that lands during the shutdown flush still reaches the disk. The window this closes is
+about one sampling interval wide, which is why it is small; it is also the window bug 1 above made unbounded.
+
+**5. Clock jumps and the irreversible delete (GS-110, `SensorRegistryCore.housekeeping`). Applied in part, and the
+reason matters.** Expiry deletes the sensor's history file, and housekeeping compared the raw wall clock against
+`lastSeen`/`stateSince` with no guard at all, although section 18's risk table names a "clock-skew guard" as the
+mitigation for clock jumps. The **backwards** half is now guarded: if `now` is more than
+`CLOCK_SKEW_TOLERANCE_SEC` (60 s) behind the newest timestamp the registry itself holds - any entry's
+`lastSeen`/`stateSince`, or the runs table's newest start or stop - the stale and tombstone sweeps are skipped and
+counted (`clockSkewSkippedSweeps()`), only the cap-driven `evictOldestTombstones()` still runs, and `SensorRegistry`
+writes one WARN per server run naming both timestamps. Nothing the registry holds can legitimately lie in the future,
+so this direction is unambiguous.
+
+The review's suggested **forward** guard - "skip the sweep when `now` is more than about a day ahead of the newest
+`lastSeen` the registry holds" - was **not** implemented, because it would silently disable section 4.3's stale
+expiry, which is the feature whose whole point is that `now - lastSeen` grows past 30 days. The unit test
+`SensorRegistryCoreTest.unloadedSensorsExpireAfterTheStaleWindow` is exactly that case, and so is an ordinary world
+that was not played for two months: a legitimately long shutdown and a clock that jumped forward are indistinguishable
+from inside the process, because every reference the process has (`registry.dat`'s `saved`, the runs table, the world
+folder's timestamps) was written by the same clock. A monotonic anchor does not help either: it is captured with the
+same wrong clock at boot, and any fake-clock test would read as a jump. What remains undetected is therefore a clock
+that is already wrong when the server boots; it is recorded as an open issue rather than papered over.
+
+One consequence is worth knowing: a run whose start was stamped with a clock in the future stays in `registry.dat`'s
+runs table, so expiry stays off until wall time passes it (at most until that row is evicted, `RunsTable.MAX_RUNS` =
+32). The Horizon-QA run shows it: `HistoryTests` drives a fake clock at 2033, and the WARN appears once afterwards,
+"the clock says 1789692582 but the registry already holds the later timestamp 2000000461". That is the conservative
+answer - nothing is deleted while the recorded timeline contains stamps from the future - and it is visible in the
+log rather than silent.
+
+**6. `/gregscope stats` threw before the first frame (GS-111).** `TelemetryFrame.EMPTY` carried `null` for its
+`SamplerStatsView` and `LimitsView` ("null only on EMPTY"), and `stats` dereferences `frame.stats()` eleven times with
+no check, although the same method already guards `io == null` and `frame.sequence() == 0`. The command is registered
+in `FMLServerStartingEvent`, before the server has ticked, so an RCON monitor or an admin asking in the first sampling
+interval (1 s by default, 5 s at `intervalTicks=100`, and again after any stop) got "An unknown error occurred" and a
+stack trace. `EMPTY` now carries a zero-valued `SamplerStatsView` and a `LimitsView` of the defaults, which also
+protects GS-113/GS-114 and the OpenComputers readers; the "null only on EMPTY" contract is gone.
+
+**7. A gametest was stealing the production load results (GS-109, `RegistryCodecTests`).**
+`theIoThreadWritesAndReadsARealHistoryFile` called `drainLoaded()` on the live `HistoryIo` and threw away every result
+that was not its own - which is bug 1's failure mode, caused on purpose by a test, for any sensor whose file happened
+to be in flight. It now runs a `HistoryIo` of its own over the same real store and save root (disjoint files: one
+fresh UUID's `.gsh` and its own `.tmp`, never the registry), so the evidence about the real save root is unchanged and
+nothing is taken from the service. The class Javadoc, which claimed the batch touches nothing live, was corrected.
+
+**8. The `-ea` check could switch itself off (GS-109, `RegistryCodecTests`).**
+`theServerThreadCannotWriteAFile` - the only in-game enforcement of section 14's "the server thread does no file I/O"
+- skipped its `assertThrows` when `desiredAssertionStatus()` was false, so losing the
+`-ea:io.github.ldogg123.gregscope...` line in `addon.gradle` (a Gradle upgrade that rewrites the run tasks, a merge)
+would have turned the check green rather than red. Assertions are now a precondition with a message naming the file
+to fix.
+
+**9. The CI budget was under-counted by 700 ticks (docs/testing.md).** The recount script matched `timeoutTicks` only
+as a number, so the two batches that write `timeoutTicks = OPENOS_BATCH_TIMEOUT_TICKS` (450) were charged the default
+100 each. The true worst case is **5,520 ticks = 276 s**, not 4,820 / 241 s, and the 300 s is a wall-clock
+`timeout 300 ./gradlew runServer` that also covers Gradle configuration and Forge/GTNH boot (about 30 s locally), so
+the "59 s of headroom" recorded after GS-112 does not exist. The script now resolves `static final int` constants;
+`docs/testing.md` carries the corrected figure and the correction itself. No test timeout and no workflow input was
+changed here, because the 300 s step is a fixed constraint for this work; the choice between raising it and lowering
+`OPENOS_BATCH_TIMEOUT_TICKS` (450 against an observed 149) is left as an open issue.
+
+**Tests.** Unit 493 -> 500: three new `HistoryIoTest` cases (a failed load answers and is not `absent`; failed
+writes reach `drainWriteFailures()` while a failed delete needs no answer; `terminate()` gets rid of a parked
+worker), three new `PersistenceScenarioTest` scenarios over an in-memory store that can now be told to fail a chosen
+number of reads or writes, one new `SensorRegistryCoreTest` case for the backwards-clock guard, and an extended
+`TelemetryFrameTest`. In game 126 -> 127: `CommandTests.statsRunsBeforeTheFirstFrameIsPublished`. Negative controls:
+dropping the new `report(task)` call in `HistoryIo.perform` failed exactly the five new failure-path unit tests, and
+restoring `TelemetryFrame.EMPTY`'s nulls failed exactly one in-game test with
+`NullPointerException at GregScopeCommand.stats(GregScopeCommand.java:190)` - the reported bug, reproduced. Both were
+reverted and verified with `cmp`.

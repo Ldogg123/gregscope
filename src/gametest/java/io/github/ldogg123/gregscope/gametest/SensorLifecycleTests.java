@@ -25,7 +25,6 @@ import gregtech.api.enums.Materials;
 import gregtech.api.interfaces.tileentity.ICoverable;
 import gregtech.api.interfaces.tileentity.IGregTechTileEntity;
 import gregtech.api.metatileentity.implementations.MTEBasicMachine;
-import gregtech.api.util.GTUtility;
 import gregtech.common.items.IDMetaTool01;
 import gregtech.common.items.MetaGeneratedTool01;
 import io.github.ldogg123.gregscope.GregScope;
@@ -36,7 +35,6 @@ import io.github.ldogg123.gregscope.registry.SensorEntry;
 import io.github.ldogg123.gregscope.registry.SensorRegistry;
 import io.github.ldogg123.gregscope.registry.SensorState;
 import io.github.ldogg123.gregscope.sensor.MachineSensorCover;
-import io.github.ldogg123.gregscope.sensor.SensorCovers;
 import io.github.ldogg123.gregscope.sensor.SensorIdentity;
 import io.github.ldogg123.gregscope.sensor.SensorNbtCodec;
 
@@ -507,40 +505,7 @@ public class SensorLifecycleTests {
     /** A GT machine placed from an item whose NBT already carries this exact sensor identity on {@link #COVERED}. */
     private static IGregTechTileEntity placeMachineWithSensorNbt(GameTestHelper helper, TestPos pos,
         SensorIdentity identity) {
-        NBTTagCompound data = new NBTTagCompound();
-        data.setByte(SensorNbtCodec.GS, (byte) SensorNbtCodec.FORMAT);
-        data.setLong(
-            SensorNbtCodec.ID_MSB,
-            identity.id()
-                .getMostSignificantBits());
-        data.setLong(
-            SensorNbtCodec.ID_LSB,
-            identity.id()
-                .getLeastSignificantBits());
-        data.setLong(SensorNbtCodec.CREATED, identity.createdEpochSec());
-        if (identity.owner() != null) {
-            data.setLong(
-                SensorNbtCodec.OWNER_MSB,
-                identity.owner()
-                    .getMostSignificantBits());
-            data.setLong(
-                SensorNbtCodec.OWNER_LSB,
-                identity.owner()
-                    .getLeastSignificantBits());
-            data.setString(SensorNbtCodec.OWNER_NAME, identity.ownerName());
-        }
-        NBTTagCompound entry = new NBTTagCompound();
-        entry.setByte("s", (byte) COVERED.ordinal());
-        entry.setInteger("id", GTUtility.stackToInt(SensorCovers.sensorStack()));
-        entry.setInteger("tra", 0);
-        entry.setTag("d", data);
-        NBTTagList covers = new NBTTagList();
-        covers.appendTag(entry);
-        NBTTagCompound nbt = new NBTTagCompound();
-        nbt.setTag(GTValues.NBT.COVERS, covers);
-        ItemStack stack = ItemList.Machine_LV_E_Furnace.get(1L);
-        stack.setTagCompound(nbt);
-        return GtPlacement.placeMachine(helper, pos, stack);
+        return SensorFixtures.placeMachineWithSensorNbt(helper, pos, COVERED, identity);
     }
 
     private static NBTTagCompound savedCoverEntry(GameTestHelper helper, TestPos pos, ForgeDirection side) {

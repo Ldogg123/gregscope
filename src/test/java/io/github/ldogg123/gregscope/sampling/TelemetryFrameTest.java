@@ -115,6 +115,11 @@ class TelemetryFrameTest {
         assertNull(frame.sensor(null));
     }
 
+    /**
+     * Every reader sees this frame during the first sampling interval of a server run (and again after a stop), so
+     * it has to answer every question a published frame answers. {@code /gregscope stats} reads eleven of these
+     * numbers in a row without a null check; a null here would turn an ordinary command into a stack trace.
+     */
     @Test
     void theEmptyFrameIsUsableBeforeTheFirstPublish() {
         assertEquals(0L, TelemetryFrame.EMPTY.sequence());
@@ -122,6 +127,29 @@ class TelemetryFrameTest {
             TelemetryFrame.EMPTY.sensors()
                 .isEmpty());
         assertEquals(0, TelemetryFrame.EMPTY.count(SensorState.LIVE));
+
+        SamplerStatsView stats = TelemetryFrame.EMPTY.stats();
+        assertNotNull(stats, "the empty frame must carry stats, not null");
+        assertEquals(0L, stats.cycleMicrosP50());
+        assertEquals(0L, stats.cycleMicrosP99());
+        assertEquals(0L, stats.cycleMicrosMax());
+        assertEquals(0L, stats.windowTicks());
+        assertEquals(0L, stats.cyclesTotal());
+        assertEquals(0L, stats.samplesTotal());
+        assertEquals(0L, stats.budgetExceededTicksTotal());
+        assertEquals(0L, stats.samplingSkippedTotal());
+        assertEquals(0L, stats.probeErrorsTotal());
+        assertEquals(0L, stats.duplicatesRekeyedTotal());
+        assertEquals(0L, stats.quotaRefusedTotal());
+        assertEquals(0L, stats.clockSkewRefusedTotal());
+        assertEquals(0L, stats.ioQueuedTotal());
+        assertEquals(0L, stats.ioDroppedTotal());
+        assertEquals(0L, stats.ioErrorsTotal());
+
+        LimitsView limits = TelemetryFrame.EMPTY.limits();
+        assertNotNull(limits, "the empty frame must carry limits, not null");
+        assertEquals(Settings.DEFAULTS.maxSensors(), limits.maxSensors());
+        assertEquals(Settings.DEFAULTS.tickBudgetMicros(), limits.tickBudgetMicros());
     }
 
     @Test

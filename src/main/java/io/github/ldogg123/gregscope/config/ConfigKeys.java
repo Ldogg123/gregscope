@@ -41,8 +41,11 @@ public final class ConfigKeys {
     public static final Key LIMITS_MAX_OPEN_HUB_VIEWS = Key
         .range(LIMITS, "maxOpenHubViews", 32, 1, 256, "Telemetry Hub GUIs open at the same time, server-wide.");
 
-    public static final Key HISTORY_PERSIST = Key
-        .bool(HISTORY, "persist", true, "Write minute history and the registry under <world>/gregscope/.");
+    public static final Key HISTORY_PERSIST = Key.bool(
+        HISTORY,
+        "persist",
+        true,
+        "Write minute history files under <world>/gregscope/history/. The registry is saved either way.");
     public static final Key HISTORY_REMOVED_RETENTION_HOURS = Key
         .range(HISTORY, "removedRetentionHours", 24, 1, 168, "Hours the history of a removed sensor is kept.");
     public static final Key HISTORY_STALE_EXPIRY_DAYS = Key

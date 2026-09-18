@@ -20,7 +20,9 @@ import io.github.ldogg123.gregscope.config.Settings;
 import io.github.ldogg123.gregscope.history.GapReason;
 import io.github.ldogg123.gregscope.sampling.Clock;
 import io.github.ldogg123.gregscope.sampling.TargetResolver;
+import io.github.ldogg123.gregscope.sensor.Labels;
 import io.github.ldogg123.gregscope.sensor.MachineSensorCover;
+import io.github.ldogg123.gregscope.sensor.RenameCooldown;
 import io.github.ldogg123.gregscope.sensor.SensorCover;
 import io.github.ldogg123.gregscope.sensor.SensorEvents;
 import io.github.ldogg123.gregscope.sensor.SensorIdentity;
@@ -47,6 +49,10 @@ public final class SensorRegistry implements SensorEvents {
     private final SensorRegistryCore core;
     /** Reused, so resolving a target allocates nothing (design-v0.2 section 6.3). Server thread only. */
     private final TargetResolver resolver = new TargetResolver();
+    /** Design-v0.2 section 3.5: one cooldown for every label surface of this server run. */
+    private final RenameCooldown renameCooldown = new RenameCooldown();
+    /** True once the clock-skew WARN has been written; one per server run is enough. */
+    private boolean skewWarned;
 
     public SensorRegistry(Supplier<Settings> settings, Clock clock, TeamResolver<?> teams) {
         this.core = new SensorRegistryCore(settings, clock, teams);
@@ -178,8 +184,16 @@ public final class SensorRegistry implements SensorEvents {
         return resolver.tile();
     }
 
-    /** The live cover of a registered sensor, or null; used by the label writes of design-v0.2 section 3.5. */
-    public MachineSensorCover liveCover(UUID id) {
+    /**
+     * The live cover of a registered sensor, or null; used by the label writes of design-v0.2 section 3.5.
+     *
+     * <p>
+     * It resolves the way section 6.2 does and <b>never loads a chunk</b>: {@code DimensionManager.getWorld} returns
+     * null for a dimension that is not running and {@code World.blockExists} is a hash lookup. The cover must carry
+     * the same kind and the same UUID the registry recorded (design-v0.3 section 5.1 A2), so a re-keyed copy or a
+     * meter that replaced the machine sensor is not mistaken for it.
+     */
+    public SensorCover liveCover(UUID id) {
         SensorEntry entry = core.entry(id);
         if (entry == null || entry.state() != SensorState.LIVE) {
             return null;
@@ -189,14 +203,107 @@ public final class SensorRegistry implements SensorEvents {
             return null;
         }
         Cover cover = TargetResolver.coverAt(world, entry.x(), entry.y(), entry.z(), entry.side());
-        return cover instanceof MachineSensorCover ? (MachineSensorCover) cover : null;
+        if (!(cover instanceof SensorCover)) {
+            return null;
+        }
+        SensorCover sensor = (SensorCover) cover;
+        SensorIdentity carried = sensor.identity();
+        if (sensor.sensorKind() != entry.kind() || carried == null
+            || !carried.id()
+                .equals(id)) {
+            return null;
+        }
+        return sensor;
+    }
+
+    /** What {@link #writeLabel} did (design-v0.2 section 3.5). */
+    public enum LabelOutcome {
+        /** The cover NBT and the registry entry now carry the new label. */
+        WRITTEN,
+        /** Longer than {@link Labels#MAX_INPUT_UNITS} UTF-16 units: refused before sanitizing. */
+        TOO_LONG,
+        /** No registry entry with that UUID. */
+        NOT_FOUND,
+        /** Not LIVE, or its cover is not reachable without loading a chunk: "sensor not loaded". */
+        NOT_LOADED,
+        /** The player wrote a label less than {@code hub.renameCooldownSeconds} ago. */
+        COOLDOWN
+    }
+
+    /**
+     * Design-v0.2 section 3.5: writes a label to the cover, which is the source of truth, and mirrors it into the
+     * registry entry. Shared by {@code /gregscope label} (GS-111) and the Hub's label field (GS-114); the caller has
+     * already asked {@code AccessPolicy.canRename}, because only the caller knows who is asking.
+     *
+     * <p>
+     * A write <b>never loads a chunk</b>: an unloaded sensor is {@link LabelOutcome#NOT_LOADED}. The cooldown is
+     * charged only for a write that really happened.
+     *
+     * @param rawText the text as typed; empty clears the label
+     * @param player  the writing player, or null for the console, which the cooldown does not limit
+     */
+    public LabelOutcome writeLabel(UUID id, String rawText, UUID player) {
+        if (!Labels.acceptsInput(rawText)) {
+            return LabelOutcome.TOO_LONG;
+        }
+        SensorEntry entry = core.entry(id);
+        if (entry == null) {
+            return LabelOutcome.NOT_FOUND;
+        }
+        if (entry.state() != SensorState.LIVE) {
+            return LabelOutcome.NOT_LOADED;
+        }
+        long now = GregScope.clock()
+            .epochSec();
+        int cooldown = core.settings()
+            .renameCooldownSeconds();
+        if (renameCooldown.remaining(player, now, cooldown) > 0) {
+            return LabelOutcome.COOLDOWN;
+        }
+        SensorCover cover = liveCover(id);
+        if (cover == null) {
+            return LabelOutcome.NOT_LOADED;
+        }
+        String label = Labels.sanitize(rawText);
+        if (!cover.setLabel(label)) {
+            return LabelOutcome.NOT_LOADED;
+        }
+        entry.setIdentity(
+            entry.identity()
+                .withLabel(label));
+        core.markDirty();
+        renameCooldown.record(player, now);
+        return LabelOutcome.WRITTEN;
+    }
+
+    /** Seconds {@code player} still has to wait before the next label write (design-v0.2 section 3.5); 0 if none. */
+    public int renameCooldownRemaining(UUID player) {
+        return renameCooldown.remaining(
+            player,
+            GregScope.clock()
+                .epochSec(),
+            core.settings()
+                .renameCooldownSeconds());
     }
 
     // --- housekeeping and purge ---
 
     /** Design-v0.2 section 4.3: expiry and the tombstone cap. Called at server start and by GS-108's tick handler. */
     public int housekeeping() {
-        return core.housekeeping();
+        long skewedBefore = core.clockSkewSkippedSweeps();
+        int removed = core.housekeeping();
+        if (core.clockSkewSkippedSweeps() > skewedBefore && !skewWarned) {
+            // Once per server run: expiry deletes history files, so a clock that went backwards must be seen by an
+            // operator, but a wrong clock would otherwise say so every housekeeping interval for ever.
+            skewWarned = true;
+            GregScope.LOG.warn(
+                "GregScope is not expiring anything: the clock says {} but the registry already holds the later"
+                    + " timestamp {}. Expiry, and the history files it deletes, stays off until the clock has"
+                    + " passed it again.",
+                Long.valueOf(core.lastSkewNowEpochSec()),
+                Long.valueOf(core.lastSkewNewestEpochSec()));
+        }
+        return removed;
     }
 
     public boolean purge(UUID id) {

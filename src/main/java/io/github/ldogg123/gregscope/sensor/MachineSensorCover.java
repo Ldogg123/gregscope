@@ -113,6 +113,23 @@ public class MachineSensorCover extends Cover implements SensorCover {
     }
 
     /**
+     * Design-v0.2 section 3.5: the label write. The cover NBT is the source of truth, so the identity is replaced
+     * with one carrying the new label and the holder is marked dirty; {@code SensorRegistry.writeLabel} mirrors the
+     * same value into the registry entry. An inert cover (no identity, or an unsupported data version) is never
+     * written to. Server thread only.
+     */
+    @Override
+    public boolean setLabel(String label) {
+        ICoverable holder = getTile();
+        if (identity == null || holder == null || !holder.isServerSide()) {
+            return false;
+        }
+        identity = identity.withLabel(label);
+        holder.markDirty();
+        return true;
+    }
+
+    /**
      * The player who attached this cover, once, or {@code null}. The registry reads it on the first heartbeat so a
      * refused sensor can say so in chat; after that the cover forgets the player.
      */

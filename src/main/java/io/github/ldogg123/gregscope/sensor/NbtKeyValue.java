@@ -4,14 +4,15 @@ import net.minecraft.nbt.NBTTagCompound;
 
 /**
  * The {@link KeyValue} adapter over Minecraft's {@code NBTTagCompound}, used for the cover's {@code d} compound
- * (design-v0.2 §3.3). The pure {@link SensorNbtCodec} never sees an NBT type.
+ * (design-v0.2 §3.3) and, since GS-112, for the Telemetry Hub tile entity's compound (§9.1). The pure
+ * {@link SensorNbtCodec} never sees an NBT type.
  *
  * <p>
  * Type ids are the ones {@code NBTBase} uses: 1 byte, 4 long, 8 string. {@code hasKey(key, id)} is true only when the
  * key holds a value of exactly that type, which is what {@link KeyValue} requires: a foreign value under a GregScope
  * key reads as absent instead of throwing or silently converting.
  */
-final class NbtKeyValue implements KeyValue {
+public final class NbtKeyValue implements KeyValue {
 
     private static final int TAG_BYTE = 1;
     private static final int TAG_LONG = 4;
@@ -19,7 +20,7 @@ final class NbtKeyValue implements KeyValue {
 
     private final NBTTagCompound tag;
 
-    NbtKeyValue(NBTTagCompound tag) {
+    public NbtKeyValue(NBTTagCompound tag) {
         if (tag == null) {
             throw new IllegalArgumentException("tag");
         }

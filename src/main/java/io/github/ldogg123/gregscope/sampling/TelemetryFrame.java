@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
+import io.github.ldogg123.gregscope.config.Settings;
 import io.github.ldogg123.gregscope.registry.SensorState;
 
 /**
@@ -32,15 +33,21 @@ public final class TelemetryFrame {
         }
     };
 
-    /** The frame a reader sees before the sampler ever published one. */
+    /**
+     * The frame a reader sees before the sampler ever published one - which is every reader in the first sampling
+     * interval of a server run, and again after a stop. Its {@link #stats()} and {@link #limits()} are real,
+     * zero-valued views rather than nulls: {@code /gregscope stats}, the Hub and the OpenComputers callbacks read
+     * them without asking whether a frame has been published, and one of them dereferencing a null here would
+     * answer an ordinary command with an exception.
+     */
     public static final TelemetryFrame EMPTY = new TelemetryFrame(
         0L,
         0L,
         0L,
         0,
         Collections.<SensorView>emptyList(),
-        null,
-        null);
+        new SamplerStatsView(new SamplerStats(), 0L, 0L),
+        new LimitsView(Settings.DEFAULTS));
 
     private final long sequence;
     private final long publishedNanos;
@@ -105,12 +112,12 @@ public final class TelemetryFrame {
         return null;
     }
 
-    /** Null only on {@link #EMPTY}. */
+    /** Never null; all-zero on {@link #EMPTY}. */
     public SamplerStatsView stats() {
         return stats;
     }
 
-    /** Null only on {@link #EMPTY}. */
+    /** Never null; the configured defaults on {@link #EMPTY}. */
     public LimitsView limits() {
         return limits;
     }

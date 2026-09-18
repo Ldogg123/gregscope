@@ -339,6 +339,12 @@ public class SensorPlacementTests {
 
         @Override
         public void setAvailability(String availability) {}
+
+        /** Never registered, so no label surface can reach it; a write would be a bug, so it refuses. */
+        @Override
+        public boolean setLabel(String label) {
+            return false;
+        }
     }
 
     // --- helpers ---

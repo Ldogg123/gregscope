@@ -11,7 +11,8 @@ jobs:
   build-and-test:
     uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/build-and-test.yml@master
     with:
-      timeout: 300
+      # Worst case if every Horizon-QA batch hit its timeout is ~280 s, plus Gradle/Forge boot.
+      timeout: 600
       # Horizon-QA in-game tests (src/gametest, dev/CI only). Same inputs GT5-Unofficial uses.
       horizonqa: true
       horizonqa-tests: gregscope

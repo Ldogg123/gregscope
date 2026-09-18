@@ -49,6 +49,14 @@ class AssetsExistTest {
         assertEquals("machine_sensor", GregScopeAssets.REGISTRY_MACHINE_SENSOR);
         assertEquals("gregscope.machine_sensor", GregScopeAssets.UNLOCALIZED_MACHINE_SENSOR);
         assertEquals("item.gregscope.machine_sensor.name", GregScopeAssets.LANG_ITEM_MACHINE_SENSOR);
+        // GS-112, design-v0.2 §17: the Telemetry Hub's registry names are frozen before the first public jar.
+        assertEquals("telemetry_hub", GregScopeAssets.REGISTRY_TELEMETRY_HUB);
+        assertEquals("gregscope:telemetry_hub", GregScopeAssets.TILE_ENTITY_TELEMETRY_HUB);
+        assertEquals("gregscope.telemetry_hub", GregScopeAssets.UNLOCALIZED_TELEMETRY_HUB);
+        assertEquals("tile.gregscope.telemetry_hub.name", GregScopeAssets.LANG_TILE_TELEMETRY_HUB);
+        assertEquals("telemetry_hub_front", GregScopeAssets.BLOCK_ICON_HUB_FRONT);
+        assertEquals("telemetry_hub_side", GregScopeAssets.BLOCK_ICON_HUB_SIDE);
+        assertEquals("telemetry_hub_top", GregScopeAssets.BLOCK_ICON_HUB_TOP);
         assertArrayEquals(
             new String[] { "gregscope.tooltip.sensor.1", "gregscope.tooltip.sensor.2", "gregscope.tooltip.sensor.3" },
             GregScopeAssets.sensorTooltipKeys());
@@ -71,6 +79,9 @@ class AssetsExistTest {
         }
         assertTrue(checked.contains(ASSETS + "textures/blocks/iconsets/GREGSCOPE_SENSOR_OVERLAY.png"), "" + checked);
         assertTrue(checked.contains(ASSETS + "textures/items/machine_sensor.png"), "" + checked);
+        assertTrue(checked.contains(ASSETS + "textures/blocks/telemetry_hub_front.png"), "" + checked);
+        assertTrue(checked.contains(ASSETS + "textures/blocks/telemetry_hub_side.png"), "" + checked);
+        assertTrue(checked.contains(ASSETS + "textures/blocks/telemetry_hub_top.png"), "" + checked);
     }
 
     @Test
@@ -104,6 +115,7 @@ class AssetsExistTest {
         }
         assertEquals(new ArrayList<String>(), missing, "lang keys missing or empty in en_US.lang");
         assertEquals("Machine Sensor", lang.get(GregScopeAssets.LANG_ITEM_MACHINE_SENSOR));
+        assertEquals("Telemetry Hub", lang.get(GregScopeAssets.LANG_TILE_TELEMETRY_HUB));
         assertEquals(
             "Attach to a GT machine or multiblock controller (sneak + right-click)",
             lang.get(GregScopeAssets.LANG_TOOLTIP_SENSOR_1));

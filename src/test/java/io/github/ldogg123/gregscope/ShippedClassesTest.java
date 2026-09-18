@@ -19,8 +19,10 @@ import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Collectors;
@@ -78,6 +80,31 @@ class ShippedClassesTest {
         ROOT + "sampling/SensorView",
         ROOT + "sampling/TargetResolver",
         ROOT + "sampling/TelemetrySampler",
+        // GS-109 persistence: the pure file codec, the file store seam and its NIO adapter, the I/O thread, and the
+        // registry NBT codec with its runs table.
+        ROOT + "history/HistoryFileCodec",
+        ROOT + "history/Crc32",
+        ROOT + "history/SlotLayouts",
+        ROOT + "history/FileStore",
+        ROOT + "history/IoListener",
+        ROOT + "history/NioFileStore",
+        ROOT + "history/HistoryIo",
+        ROOT + "registry/RunsTable",
+        ROOT + "registry/RegistryNbtCodec",
+        // GS-110 persistence wiring: the two services and the one Forge-bus hook the saves hang on.
+        ROOT + "history/HistoryPersistence",
+        ROOT + "registry/RegistryPersistence",
+        ROOT + "GregScopeWorldEvents",
+        // GS-111 commands: the pure argument parser and the one CommandBase, plus the shared rename cooldown.
+        ROOT + "command/CommandArgs",
+        ROOT + "command/GregScopeCommand",
+        ROOT + "sensor/RenameCooldown",
+        // GS-112 Telemetry Hub: the pure record codec and view cap, the block, the one tile entity, registration.
+        ROOT + "hub/HubNbtCodec",
+        ROOT + "hub/HubViews",
+        ROOT + "hub/BlockTelemetryHub",
+        ROOT + "hub/TileTelemetryHub",
+        ROOT + "hub/TelemetryHubs",
         ROOT + "integration/opencomputers/GregTechMachineEnvironment",
         ROOT + "integration/opencomputers/GregTechMachineDriver",
         ROOT + "probe/GregTechMachineProbe",
@@ -110,17 +137,31 @@ class ShippedClassesTest {
         Arrays.asList("canUpdate", "update", "updateEntity"));
     private static final String TILE_ENTITY = "net/minecraft/tileentity/TileEntity";
 
+    /**
+     * GS-112 lifts "no tile entities" (design-v0.2 §1.4) for <b>exactly one</b> class: the Telemetry Hub's tile
+     * entity extends {@code TileEntity} and must declare {@code canUpdate} to answer <b>false</b>, which is what keeps
+     * it out of every world's tick list. The lift is exactly that name: {@code update} and {@code updateEntity} stay
+     * forbidden here too, which {@link #theOnlyTileEntityIsTheHub()} checks together with the super class and the
+     * constant {@code false} the running server sees through {@code HubBlockTests}.
+     */
+    private static final String HUB_TILE = ROOT + "hub/TileTelemetryHub";
+    private static final Set<String> HUB_TILE_MEMBER_NAMES = new HashSet<>(Arrays.asList("canUpdate"));
+
     private static final String GAME_REGISTRY = "cpw/mods/fml/common/registry/GameRegistry";
     /**
-     * GS-105 lifts "no items" (design-v0.2 §1.4): {@code GameRegistry} may be referenced by this one registration
-     * class,
-     * and there only for items. Registering world generators or tile entities stays forbidden everywhere (GS-112 lifts
-     * tile entity registration for the Hub, and only that).
+     * GS-105 lifts "no items" and GS-112 lifts "no blocks, no tile entities" (design-v0.2 §1.4): {@code GameRegistry}
+     * may be referenced by these two registration classes only, and each only for the calls its ticket needs. The
+     * value is the exact set of {@code register*} member names that class may name - the reader does not tie a member
+     * name to its owner, so GT's {@code registerCover} is listed with the cover registration too. Registering world
+     * generators stays forbidden everywhere, and so does {@code registerTileEntityWithAlternatives}.
      */
-    private static final Set<String> GAME_REGISTRY_USERS = new HashSet<>(Arrays.asList(ROOT + "sensor/SensorCovers"));
-    /** {@code register*} names the registration class may reference: GameRegistry's item call and GT's cover call. */
-    private static final Set<String> GAME_REGISTRY_ALLOWED_MEMBERS = new HashSet<>(
-        Arrays.asList("registerItem", "registerCover"));
+    private static final Map<String, Set<String>> GAME_REGISTRY_USERS = new TreeMap<>();
+    static {
+        GAME_REGISTRY_USERS
+            .put(ROOT + "sensor/SensorCovers", new HashSet<>(Arrays.asList("registerItem", "registerCover")));
+        GAME_REGISTRY_USERS
+            .put(ROOT + "hub/TelemetryHubs", new HashSet<>(Arrays.asList("registerBlock", "registerTileEntity")));
+    }
     private static final List<String> REGISTRATION_MEMBER_NAMES = Arrays
         .asList("registerWorldGenerator", "registerTileEntity", "registerTileEntityWithAlternatives", "registerBlock");
 
@@ -136,6 +177,42 @@ class ShippedClassesTest {
         "cpw/mods/fml/common/eventhandler/EventBus",
         "cpw/mods/fml/common/gameevent/TickEvent",
         "cpw/mods/fml/common/FMLCommonHandler");
+
+    /**
+     * GS-109 lifts "no threads" for <b>exactly one</b> class and its inner classes: {@code HistoryIo} owns the single
+     * daemon thread of design-v0.2 §8.4, which is what keeps file I/O off the server thread. Timers, executors, event
+     * subscriptions, world generators and tile entity registration stay forbidden for it as well, and
+     * {@code NioFileStore} deliberately does not name {@code Thread} either: it asks {@code HistoryIo.onIoThread()}
+     * through a {@code BooleanSupplier}, so this lift stays a single class wide.
+     */
+    private static final String IO_THREAD = ROOT + "history/HistoryIo";
+    private static final List<String> IO_THREAD_REFERENCES = Arrays.asList("java/lang/Thread");
+
+    private static boolean isIoThreadClass(String name) {
+        return name.equals(IO_THREAD) || name.startsWith(IO_THREAD + "$");
+    }
+
+    /** True when this class is allowed to name this {@code register*} member (GS-105 item, GS-112 block and tile). */
+    private static boolean allowedRegistration(String className, String member) {
+        Set<String> allowed = GAME_REGISTRY_USERS.get(className);
+        return allowed != null && allowed.contains(member);
+    }
+
+    /**
+     * GS-110 lifts the event-bus part of {@link #PERIODIC_WORK_REFERENCES} for <b>exactly one more</b> class:
+     * {@code GregScopeWorldEvents} carries the two hooks design-v0.2 §8.3 and §8.4 name, the overworld's
+     * {@code WorldEvent.Save} (save the registry when dirty) and {@code WorldEvent.Unload} (finalize and flush). A
+     * world save is not periodic work, but it needs {@code @SubscribeEvent} on the <b>Forge</b> bus, which no shipped
+     * class named before. The lift is exactly {@code MinecraftForge}, its bus type and {@code SubscribeEvent}: the
+     * tick event, {@code FMLCommonHandler}, {@code GameRegistry}, world generators, threads, timers and executors stay
+     * forbidden here, which {@link #theOnlyWorldEventHandlerIsThePersistenceHook()} checks together with the two
+     * events it really subscribes to.
+     */
+    private static final String WORLD_EVENTS = ROOT + "GregScopeWorldEvents";
+    private static final List<String> WORLD_EVENT_REFERENCES = Arrays.asList(
+        "cpw/mods/fml/common/eventhandler/SubscribeEvent",
+        "cpw/mods/fml/common/eventhandler/EventBus",
+        "net/minecraftforge/common/MinecraftForge");
 
     private static TreeMap<String, ClassInfo> classes;
 
@@ -223,25 +300,32 @@ class ShippedClassesTest {
         for (ClassInfo info : classes.values()) {
             for (String utf8 : info.utf8) {
                 for (String reference : PERIODIC_WORK_REFERENCES) {
-                    if (GAME_REGISTRY.equals(reference) && GAME_REGISTRY_USERS.contains(info.name)
+                    if (GAME_REGISTRY.equals(reference) && GAME_REGISTRY_USERS.containsKey(info.name)
                         && utf8.equals(GAME_REGISTRY)) {
                         continue;
                     }
                     if (TICK_HANDLER.equals(info.name) && TICK_HANDLER_REFERENCES.contains(reference)) {
                         continue;
                     }
+                    if (isIoThreadClass(info.name) && IO_THREAD_REFERENCES.contains(reference)) {
+                        continue;
+                    }
+                    if (WORLD_EVENTS.equals(info.name) && WORLD_EVENT_REFERENCES.contains(reference)) {
+                        continue;
+                    }
                     if (utf8.contains(reference)) {
                         violations.add(info.name + " references " + utf8);
                     }
                 }
-                if (TICK_MEMBER_NAMES.contains(utf8)) {
+                if (TICK_MEMBER_NAMES.contains(utf8)
+                    && !(HUB_TILE.equals(info.name) && HUB_TILE_MEMBER_NAMES.contains(utf8))) {
                     violations.add(info.name + " declares or calls " + utf8);
                 }
-                if (REGISTRATION_MEMBER_NAMES.contains(utf8)) {
+                if (REGISTRATION_MEMBER_NAMES.contains(utf8) && !allowedRegistration(info.name, utf8)) {
                     violations.add(info.name + " declares or calls " + utf8);
                 }
             }
-            if (TILE_ENTITY.equals(info.superName)) {
+            if (TILE_ENTITY.equals(info.superName) && !HUB_TILE.equals(info.name)) {
                 violations.add(info.name + " extends " + TILE_ENTITY);
             }
         }
@@ -279,27 +363,72 @@ class ShippedClassesTest {
     }
 
     /**
-     * The GS-105 lift is narrow: the one registration class references {@code GameRegistry} and calls
-     * {@code registerItem} (so the scan cannot pass vacuously), and nothing else is called on it.
+     * The GS-105 and GS-112 lifts are narrow: each registration class references {@code GameRegistry} and really makes
+     * every call it is allowed (so the skips in {@code noPeriodicWorkHooks} cannot pass vacuously), and neither names
+     * any other {@code register*} member - the sensor registration cannot register a block or a tile entity, and the
+     * Hub registration cannot register an item or a world generator.
      */
     @Test
-    void gameRegistryIsUsedOnlyToRegisterTheSensorItem() {
-        for (String user : GAME_REGISTRY_USERS) {
-            ClassInfo info = classes.get(user);
-            assertTrue(info != null, "registration class not scanned: " + user);
-            assertTrue(info.utf8.contains(GAME_REGISTRY), user + " no longer references GameRegistry; narrow the lift");
-            assertTrue(info.utf8.contains("registerItem"), user + " does not call registerItem");
+    void gameRegistryIsUsedOnlyToRegisterTheSensorItemAndTheHubBlock() {
+        for (Map.Entry<String, Set<String>> user : GAME_REGISTRY_USERS.entrySet()) {
+            ClassInfo info = classes.get(user.getKey());
+            assertTrue(info != null, "registration class not scanned: " + user.getKey());
+            assertTrue(
+                info.utf8.contains(GAME_REGISTRY),
+                user.getKey() + " no longer references GameRegistry; narrow the lift");
+            for (String member : new TreeSet<>(user.getValue())) {
+                assertTrue(info.utf8.contains(member), user.getKey() + " does not call " + member);
+            }
         }
         // This reader does not tie member names to their owner, so every register* name in the class must be allowed.
         List<String> violations = new ArrayList<>();
-        for (String user : GAME_REGISTRY_USERS) {
-            for (String utf8 : classes.get(user).utf8) {
-                if (utf8.startsWith("register") && !GAME_REGISTRY_ALLOWED_MEMBERS.contains(utf8)) {
-                    violations.add(user + " references " + utf8);
+        for (Map.Entry<String, Set<String>> user : GAME_REGISTRY_USERS.entrySet()) {
+            for (String utf8 : classes.get(user.getKey()).utf8) {
+                if (utf8.startsWith("register") && !user.getValue()
+                    .contains(utf8)) {
+                    violations.add(user.getKey() + " references " + utf8);
                 }
             }
         }
-        assertEquals(new ArrayList<String>(), violations, "unexpected register* calls in the registration class");
+        assertEquals(new ArrayList<String>(), violations, "unexpected register* calls in a registration class");
+    }
+
+    /**
+     * The GS-112 lift is narrow too: {@code TileTelemetryHub} really is a {@code TileEntity} that declares
+     * {@code canUpdate} (so the skips in {@code noPeriodicWorkHooks} cannot pass vacuously), it declares neither
+     * {@code update} nor {@code updateEntity}, it uses none of the periodic-work references, and no other shipped
+     * class extends {@code TileEntity} or names any tick member - which {@code noPeriodicWorkHooks} enforces for every
+     * class but this one. That {@code canUpdate()} really answers <b>false</b> on a placed Hub is checked on the
+     * running server by {@code HubBlockTests}: this reader sees the constant pool, not the method bodies.
+     */
+    @Test
+    void theOnlyTileEntityIsTheHub() {
+        ClassInfo hub = classes.get(HUB_TILE);
+        assertTrue(hub != null, "the Hub tile entity was not scanned: " + HUB_TILE);
+        assertEquals(TILE_ENTITY, hub.superName, HUB_TILE + " no longer extends TileEntity; narrow the lift");
+        assertTrue(hub.utf8.contains("canUpdate"), HUB_TILE + " does not declare canUpdate; narrow the lift");
+        for (String member : TICK_MEMBER_NAMES) {
+            if (!HUB_TILE_MEMBER_NAMES.contains(member)) {
+                assertTrue(!hub.utf8.contains(member), HUB_TILE + " declares or calls " + member);
+            }
+        }
+        List<String> violations = new ArrayList<>();
+        for (String utf8 : hub.utf8) {
+            for (String reference : PERIODIC_WORK_REFERENCES) {
+                if (utf8.contains(reference)) {
+                    violations.add(HUB_TILE + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), violations, "the Hub tile entity may only be a non-ticking TileEntity");
+        // And nothing else may be a tile entity at all.
+        List<String> others = new ArrayList<>();
+        for (ClassInfo info : classes.values()) {
+            if (!info.name.equals(HUB_TILE) && TILE_ENTITY.equals(info.superName)) {
+                others.add(info.name + " extends " + TILE_ENTITY);
+            }
+        }
+        assertEquals(new ArrayList<String>(), others, "shipped classes other than the Hub extending TileEntity");
     }
 
     /**
@@ -340,6 +469,108 @@ class ShippedClassesTest {
             }
         }
         assertEquals(new ArrayList<String>(), violations, "the sampler may only use the tick references");
+    }
+
+    /**
+     * The GS-109 lift is narrow too: {@code HistoryIo} really does own a thread (so the skip in
+     * {@code noPeriodicWorkHooks} cannot pass vacuously), it names it {@code GregScope-IO} and makes it a daemon, it
+     * uses none of the other periodic-work references, and no other shipped class - {@code NioFileStore} included -
+     * names {@code java.lang.Thread}, which {@code noPeriodicWorkHooks} enforces for every class but this one.
+     */
+    @Test
+    void theOnlyThreadIsTheIoThread() {
+        ClassInfo io = classes.get(IO_THREAD);
+        assertTrue(io != null, "the I/O thread class was not scanned: " + IO_THREAD);
+        for (String reference : IO_THREAD_REFERENCES) {
+            boolean seen = false;
+            for (String utf8 : io.utf8) {
+                seen |= utf8.contains(reference);
+            }
+            assertTrue(seen, IO_THREAD + " no longer references " + reference + "; narrow the lift");
+        }
+        assertTrue(io.utf8.contains("GregScope-IO"), "the I/O thread is not named GregScope-IO");
+        assertTrue(io.utf8.contains("setDaemon"), "the I/O thread is not made a daemon");
+        // The lift is only about java.lang.Thread: event buses, timers and executors stay forbidden here too.
+        List<String> violations = new ArrayList<>();
+        for (String name : classes.keySet()) {
+            if (!isIoThreadClass(name)) {
+                continue;
+            }
+            for (String utf8 : classes.get(name).utf8) {
+                for (String reference : PERIODIC_WORK_REFERENCES) {
+                    if (!IO_THREAD_REFERENCES.contains(reference) && utf8.contains(reference)) {
+                        violations.add(name + " references " + utf8);
+                    }
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), violations, "the I/O thread class may only use java.lang.Thread");
+        // The file store is the other half of "no file I/O on the server thread"; it must not need Thread itself.
+        ClassInfo store = classes.get(ROOT + "history/NioFileStore");
+        assertTrue(store != null, "the file store was not scanned");
+        for (String utf8 : store.utf8) {
+            assertTrue(!utf8.contains("java/lang/Thread"), "NioFileStore references " + utf8 + "; widen the lift?");
+        }
+        assertTrue(store.utf8.contains("onIoThread"), "NioFileStore does not ask HistoryIo which thread it is on");
+    }
+
+    /**
+     * The GS-110 lift is narrow too: {@code GregScopeWorldEvents} really does subscribe to the Forge bus (so the skip
+     * in {@code noPeriodicWorkHooks} cannot pass vacuously), it names exactly the two {@code WorldEvent} types
+     * design-v0.2 §8.3 and §8.4 ask for and no other, it uses none of the other periodic-work references, and no
+     * other shipped class names {@code MinecraftForge}, which {@code noPeriodicWorkHooks} enforces for every class but
+     * this one. That there are exactly <b>two</b> {@code @SubscribeEvent} methods and that the server holds exactly
+     * one GregScope listener on the Forge bus is checked on the running server by {@code IdleCostTests}: this reader
+     * sees the constant pool, not the method table.
+     */
+    @Test
+    void theOnlyWorldEventHandlerIsThePersistenceHook() {
+        ClassInfo hook = classes.get(WORLD_EVENTS);
+        assertTrue(hook != null, "the world event hook was not scanned: " + WORLD_EVENTS);
+        for (String reference : WORLD_EVENT_REFERENCES) {
+            boolean seen = false;
+            for (String utf8 : hook.utf8) {
+                seen |= utf8.contains(reference);
+            }
+            assertTrue(seen, WORLD_EVENTS + " no longer references " + reference + "; narrow the lift");
+        }
+        assertTrue(
+            hook.utf8.contains("Lcpw/mods/fml/common/eventhandler/SubscribeEvent;"),
+            "the world event hook has no @SubscribeEvent annotation");
+        assertTrue(
+            hook.utf8.contains("net/minecraftforge/event/world/WorldEvent$Save"),
+            "the hook does not name WorldEvent.Save, so it cannot be saving the registry on a world save");
+        assertTrue(
+            hook.utf8.contains("net/minecraftforge/event/world/WorldEvent$Unload"),
+            "the hook does not name WorldEvent.Unload, so it cannot be flushing on the overworld unload");
+        // PotentialSpawns is a WorldEvent too and fires several times per chunk per tick; a base-class handler would
+        // put GregScope on a hot path, so the two subclasses are named and the base class is not subscribed.
+        assertTrue(
+            !hook.utf8.contains("Lnet/minecraftforge/event/world/WorldEvent;)V"),
+            "the hook subscribes to WorldEvent itself, which also delivers PotentialSpawns every tick");
+        // The lift is only about the three Forge-bus references: ticks, threads, timers and executors stay forbidden.
+        List<String> violations = new ArrayList<>();
+        for (String utf8 : hook.utf8) {
+            for (String reference : PERIODIC_WORK_REFERENCES) {
+                if (!WORLD_EVENT_REFERENCES.contains(reference) && utf8.contains(reference)) {
+                    violations.add(WORLD_EVENTS + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), violations, "the world event hook may only use the Forge bus");
+        // And nothing else may reach the Forge bus: the sampler's own lift does not include MinecraftForge.
+        List<String> others = new ArrayList<>();
+        for (ClassInfo info : classes.values()) {
+            if (info.name.equals(WORLD_EVENTS)) {
+                continue;
+            }
+            for (String utf8 : info.utf8) {
+                if (utf8.contains("net/minecraftforge/common/MinecraftForge")) {
+                    others.add(info.name + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), others, "shipped classes other than the hook reaching the Forge bus");
     }
 
     /** A negative control for the scanner itself: it must see what it looks for in a real class file. */

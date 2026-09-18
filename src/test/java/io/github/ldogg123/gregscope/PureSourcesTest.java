@@ -116,12 +116,25 @@ class PureSourcesTest {
         "sampling/MachineCountersView.java",
         "sampling/SensorView.java",
         "sampling/TelemetryFrame.java",
+        // GS-109 (sections 8.1 to 8.4) plus the design-v0.3 GS-201 A5 slot-layout hook.
+        "history/Crc32.java",
+        "history/HistoryFileCodec.java",
+        "history/SlotLayouts.java",
+        "history/FileStore.java",
+        "history/IoListener.java",
+        "registry/RunsTable.java",
+        // GS-111 (section 11, section 3.5): the argument parser and the shared per-player rename cooldown.
+        "command/CommandArgs.java",
+        "sensor/RenameCooldown.java",
+        // GS-112 (section 9.1): the Telemetry Hub's NBT record and the server-wide open-view cap.
+        "hub/HubNbtCodec.java",
+        "hub/HubViews.java",
         // The settings a LimitsView copies; pure in fact since GS-101, and reached by the bytecode check.
         "config/Settings.java",
         "config/ConfigKeys.java");
 
     private static final List<String> PURE_PACKAGES = Arrays
-        .asList("history", "sensor", "sampling", "access", "registry", "model");
+        .asList("history", "sensor", "sampling", "access", "registry", "model", "command", "hub");
 
     /** Files in {@link #PURE_PACKAGES} allowed to touch game classes, each on purpose. */
     private static final Set<String> IMPURE = new HashSet<>(
@@ -138,7 +151,29 @@ class PureSourcesTest {
             "registry/SensorRegistry.java",
             // GS-108: the world half of section 6.2 and the one ServerTickEvent handler.
             "sampling/TargetResolver.java",
-            "sampling/TelemetrySampler.java"));
+            "sampling/TelemetrySampler.java",
+            // GS-109: the I/O adapters design-v0.2 §2 lists beside the pure history model. They import no game class
+            // (only java.nio and java.util.concurrent), but they are the file and thread boundary, so they are listed
+            // here on purpose: no [pure] class may name them, which is what keeps the boundary one-way.
+            "history/NioFileStore.java",
+            "history/HistoryIo.java",
+            // GS-109: registry.dat is NBT, so only an MC adapter can read or write it.
+            "registry/RegistryNbtCodec.java",
+            // GS-110: the two persistence services. Neither imports a game class, but each names an adapter above
+            // (HistoryIo, RegistryNbtCodec/FileStore), so listing them is what keeps the boundary one-way: no [pure]
+            // class may name them either.
+            "history/HistoryPersistence.java",
+            "registry/RegistryPersistence.java",
+            // GS-111: the one CommandBase of section 11. It is the Minecraft adapter around CommandArgs (chat
+            // components, an ICommandSender turned into a Viewer, the live registry), so the command package is a
+            // pure package with exactly one listed adapter.
+            "command/GregScopeCommand.java",
+            // GS-112: the Minecraft adapters of the Telemetry Hub (design-v0.2 section 9.1). The block and the tile
+            // entity are Minecraft types; the registration class is the one that names GameRegistry. The pure half of
+            // the package (the record codec and the view cap) may name none of them.
+            "hub/BlockTelemetryHub.java",
+            "hub/TileTelemetryHub.java",
+            "hub/TelemetryHubs.java"));
 
     static final List<String> FORBIDDEN = Arrays.asList(
         "net.minecraft.",

@@ -87,6 +87,52 @@ def machine_sensor_item():
     return img
 
 
+HULL = (126, 134, 146, 255)
+HULL_LIGHT = (168, 176, 188, 255)
+HULL_DARK = (74, 80, 90, 255)
+VENT = (56, 61, 69, 255)
+
+
+def hub_plate():
+    """The Telemetry Hub's casing: a bevelled steel plate with corner screws, used by all three faces."""
+    img = blank()
+    rect(img, 0, 0, 15, 15, HULL)
+    frame(img, 0, 0, 15, 15, HULL_LIGHT, HULL_DARK)
+    for x, y in ((1, 1), (14, 1), (1, 14), (14, 14)):
+        img[y][x] = HULL_DARK
+    return img
+
+
+def telemetry_hub_front():
+    """Front face: the casing with the scope screen, so a Hub reads like a bigger Machine Sensor."""
+    img = hub_plate()
+    scope(img, 3, 4)
+    return img
+
+
+def telemetry_hub_side():
+    """Side face: the casing with two cooling vents."""
+    img = hub_plate()
+    for y in (5, 9):
+        rect(img, 3, y, 12, y + 1, VENT)
+        for x in range(3, 13):
+            img[y][x] = HULL_DARK
+    return img
+
+
+def telemetry_hub_top():
+    """Top face: the casing with a small status LED and a dim trace line."""
+    img = hub_plate()
+    rect(img, 4, 6, 11, 9, SCREEN)
+    frame(img, 4, 6, 11, 9, BEZEL_LIGHT, BEZEL_DARK)
+    for x in range(5, 11):
+        img[8][x] = TRACE_DIM
+    img[7][6] = TRACE
+    img[7][9] = TRACE
+    img[5][12] = LED
+    return img
+
+
 def png_bytes(img):
     def chunk(kind, data):
         body = kind + data
@@ -104,6 +150,10 @@ TEXTURES = {
     "blocks/iconsets/GREGSCOPE_SENSOR_OVERLAY.png": sensor_overlay,
     # GregScopeAssets.ITEM_ICON_MACHINE_SENSOR
     "items/machine_sensor.png": machine_sensor_item,
+    # GregScopeAssets.BLOCK_ICON_HUB_FRONT / _SIDE / _TOP (GS-112, design-v0.2 section 9.1)
+    "blocks/telemetry_hub_front.png": telemetry_hub_front,
+    "blocks/telemetry_hub_side.png": telemetry_hub_side,
+    "blocks/telemetry_hub_top.png": telemetry_hub_top,
 }
 
 

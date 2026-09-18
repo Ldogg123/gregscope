@@ -6,6 +6,11 @@ gregscope.tooltip.sensor.1=Attach to a GT machine or multiblock controller (snea
 gregscope.tooltip.sensor.2=Rename in an anvil to set a label
 gregscope.tooltip.sensor.3=Read-only: passes power, items, fluids and redstone
 
+# Telemetry Hub (GS-112)
+tile.gregscope.telemetry_hub.name=Telemetry Hub
+gregscope.hub.denied=GregScope: this Telemetry Hub is not yours.
+gregscope.hub.busy=GregScope: too many Telemetry Hub screens are open on this server; try again in a moment.
+
 # Chat messages (GS-107)
 gregscope.chat.sensor.over_cap=GregScope: the sensor limit is reached, so this sensor is not being recorded.
 
@@ -30,3 +35,49 @@ gregscope.gap.probe_error=Probe error
 gregscope.gap.sensor_removed=Sensor removed
 gregscope.gap.server_offline=Server offline
 gregscope.gap.unknown=Unknown
+
+# /gregscope (GS-111, design-v0.2 section 11)
+gregscope.cmd.usage=/gregscope <stats|list|info|label|purge>
+gregscope.cmd.usage.stats=  stats - sampling, I/O and size numbers
+gregscope.cmd.usage.list=  list [live|unloaded|missing|tombstones|stale] [page]
+gregscope.cmd.usage.info=  info <id> - the full record and the 5 min / 24 h summaries
+gregscope.cmd.usage.label=  label <id> [text] - rename a loaded sensor; no text clears it
+gregscope.cmd.usage.purge=  purge <id> | purge --tombstones | purge --stale (operators)
+gregscope.cmd.no_server=GregScope is not running on this world.
+gregscope.cmd.unknown=Unknown subcommand: %s
+gregscope.cmd.missing_id=That subcommand needs a sensor id.
+gregscope.cmd.prefix_short=Give at least %s characters of the sensor id.
+gregscope.cmd.bad_page=Not a page number: %s
+gregscope.cmd.bad_filter=Not a list filter: %s
+gregscope.cmd.denied=You are not allowed to do that.
+gregscope.cmd.not_found=No sensor you can see matches %s.
+gregscope.cmd.ambiguous=%s matches %s sensors:
+gregscope.cmd.ambiguous.row=  %s  [%s]  %s
+gregscope.cmd.list.header=GregScope sensors (%s), page %s/%s, %s total
+gregscope.cmd.list.row=  %s  [%s]  %s  dim %s %s  seen %s
+gregscope.cmd.list.empty=No sensors you can see match the filter %s.
+gregscope.cmd.info.header=Sensor %s (kind %s): %s
+gregscope.cmd.info.owner=  Owner: %s, label: %s
+gregscope.cmd.info.state=  State: %s for %s; seen %s ago, sampled %s ago
+gregscope.cmd.info.where=  At: dim %s %s side %s
+gregscope.cmd.info.machine=  Machine: %s (%s, meta %s), last status %s
+gregscope.cmd.info.window=  %s: coverage %s, %s samples, running %s, EU/t avg %s, recipes %s
+gregscope.cmd.info.gaps=  Gaps (24 h): %s
+gregscope.cmd.info.gaps.none=  Gaps (24 h): none
+gregscope.cmd.info.loading=  History is still loading from disk.
+gregscope.cmd.info.no_history=  No history: this sensor is a tombstone (%s).
+gregscope.cmd.label.set=Sensor %s is now labelled "%s".
+gregscope.cmd.label.cleared=The label of sensor %s was cleared.
+gregscope.cmd.label.too_long=That label is too long; at most %s characters.
+gregscope.cmd.label.not_loaded=Sensor %s is not loaded, so its label cannot be written.
+gregscope.cmd.label.cooldown=Wait %s more seconds before renaming again.
+gregscope.cmd.purge.one=Purged sensor %s.
+gregscope.cmd.purge.bulk=Purged %s entries (%s).
+gregscope.cmd.purge.none=Nothing to purge (%s).
+gregscope.cmd.stats.sensors=Sensors you can see: %s live, %s unloaded, %s missing, %s in item, %s removed (cap %s)
+gregscope.cmd.stats.timing=Sampling per tick: p50 %s us, p99 %s us, max %s us over %s ticks (budget %s us)
+gregscope.cmd.stats.work=Cycles %s, samples %s, budget exceeded %s ticks, skipped %s, probe errors %s
+gregscope.cmd.stats.registry=Duplicates re-keyed %s, quota refusals %s, clock skew refused %s
+gregscope.cmd.stats.io=I/O queue %s/%s, queued %s, dropped %s, errors %s
+gregscope.cmd.stats.memory=Estimated RAM %s, history on disk %s (persist %s)
+gregscope.cmd.stats.frame=Frame #%s published %s ago, interval %s ticks (sampling %s)

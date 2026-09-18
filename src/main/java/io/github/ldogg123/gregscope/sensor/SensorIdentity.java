@@ -32,7 +32,12 @@ public final class SensorIdentity {
         this.createdEpochSec = createdEpochSec;
     }
 
-    static String capOwnerName(String name) {
+    /**
+     * Caps a cached owner name at {@link #MAX_OWNER_NAME} UTF-16 units without splitting a surrogate pair. Public
+     * because the Telemetry Hub caches an owner name the same way (design-v0.2 section 9.1), and one rule with one
+     * test is better than two.
+     */
+    public static String capOwnerName(String name) {
         if (name == null) {
             return "";
         }

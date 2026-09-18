@@ -678,6 +678,44 @@ class SensorRegistryCoreTest {
         assertNull(core.idAt(DIM, 1, 2, 3, SIDE_NORTH));
     }
 
+    /**
+     * GS-110 follow-up: expiry deletes the sensor's history file for good, so a clock that has gone <em>behind</em>
+     * what the registry already recorded must not be allowed to age anything. The sweep is refused and counted, and
+     * it works again as soon as the clock is right.
+     */
+    @Test
+    void aClockThatWentBackwardsExpiresNothing() {
+        SensorIdentity tombstone = identity();
+        beat(tombstone, 1, 2, 3, SIDE_NORTH, 100L);
+        core.removed(tombstone.id(), DIM, 1, 2, 3, SIDE_NORTH, RemovalCause.DETACHED);
+        SensorIdentity stale = identity();
+        beat(stale, 4, 5, 6, SIDE_NORTH, 100L);
+        core.unloaded(stale.id(), DIM, 4, 5, 6, SIDE_NORTH, GapReason.CHUNK_UNLOADED);
+
+        // Far enough for both windows, and then a clock that reads a year before the registry's own newest stamp.
+        clock.advanceSeconds(31 * 86_400L);
+        clock.setEpochSec(T0 - 365 * 86_400L);
+        assertEquals(0, core.housekeeping(), "a backwards clock must not expire anything");
+        assertEquals(1, core.clockSkewSkippedSweeps(), "the refused sweep must be counted");
+        assertEquals(T0 - 365 * 86_400L, core.lastSkewNowEpochSec());
+        assertEquals(T0, core.lastSkewNewestEpochSec(), "the newest stamp the registry holds");
+        assertNotNull(core.entry(tombstone.id()), "the tombstone must still be there");
+        assertNotNull(core.entry(stale.id()), "the unloaded sensor must still be there");
+        assertEquals(0, events.expired.size(), "nothing may be expired, so no history file is deleted");
+
+        // A minute behind is an NTP correction, not a jump: still no sweep, but nothing is lost either.
+        clock.setEpochSec(T0 - 30L);
+        assertEquals(0, core.housekeeping());
+        assertEquals(1, core.clockSkewSkippedSweeps(), "inside the tolerance the sweep runs as usual");
+
+        // And with the clock right again, both windows apply as they always did.
+        clock.setEpochSec(T0 + 31 * 86_400L);
+        assertEquals(2, core.housekeeping(), "both entries are past their window");
+        assertEquals(1, core.clockSkewSkippedSweeps());
+        assertNull(core.entry(tombstone.id()));
+        assertNull(core.entry(stale.id()));
+    }
+
     @Test
     void liveSensorsNeverExpire() {
         SensorIdentity sensor = identity();
@@ -974,6 +1012,11 @@ class SensorRegistryCoreTest {
 
         void advanceSeconds(long seconds) {
             epochMillis += seconds * 1000L;
+        }
+
+        /** Backwards too: the housekeeping clock-skew guard needs a clock that went the wrong way. */
+        void setEpochSec(long epochSec) {
+            epochMillis = epochSec * 1000L;
         }
 
         @Override

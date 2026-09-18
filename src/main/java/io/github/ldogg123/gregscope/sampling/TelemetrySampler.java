@@ -13,6 +13,7 @@ import cpw.mods.fml.common.gameevent.TickEvent;
 import io.github.ldogg123.gregscope.GregScope;
 import io.github.ldogg123.gregscope.config.Settings;
 import io.github.ldogg123.gregscope.history.GapReason;
+import io.github.ldogg123.gregscope.history.HistoryPersistence;
 import io.github.ldogg123.gregscope.history.MinuteAccumulator;
 import io.github.ldogg123.gregscope.history.MinuteSlot;
 import io.github.ldogg123.gregscope.model.MachineSnapshot;
@@ -76,6 +77,8 @@ public final class TelemetrySampler implements RegistryEvents, SamplerSchedule.S
     private final SamplerStats stats = new SamplerStats();
     private final SampleFolder folder = new SampleFolder();
     private final GregTechMachineProbe probe = new GregTechMachineProbe();
+    /** GS-110: the persistence service every registry event is passed on to, or null while nothing persists. */
+    private HistoryPersistence history;
 
     private long sequence;
     private long windowTicks;
@@ -130,6 +133,18 @@ public final class TelemetrySampler implements RegistryEvents, SamplerSchedule.S
         frame = TelemetryFrame.EMPTY;
     }
 
+    /**
+     * GS-110: installs the history persistence the registry events are forwarded to (design-v0.2 section 8.4). The
+     * sampler is the registry's only listener, so everything that must reach disk goes through here; null detaches it.
+     */
+    public void setHistory(HistoryPersistence persistence) {
+        this.history = persistence;
+    }
+
+    public HistoryPersistence history() {
+        return history;
+    }
+
     public SamplerStats stats() {
         return stats;
     }
@@ -166,6 +181,10 @@ public final class TelemetrySampler implements RegistryEvents, SamplerSchedule.S
         }
         if (result.intervalEnded()) {
             sweepOpenMinutes();
+            if (history != null) {
+                // Design-v0.2 section 8.4: the async history loads are applied on the server thread.
+                history.drain();
+            }
             publishFrame(active);
         }
         if (++windowTicks >= SamplerStats.WINDOW_TICKS) {
@@ -356,20 +375,32 @@ public final class TelemetrySampler implements RegistryEvents, SamplerSchedule.S
     @Override
     public void sensorLive(SensorEntry entry) {
         schedule.add(entry);
+        if (history != null) {
+            history.sensorLive(entry);
+        }
     }
 
     @Override
     public void sensorInactive(SensorEntry entry) {
         schedule.remove(entry);
+        if (history != null) {
+            history.sensorInactive(entry);
+        }
     }
 
     @Override
     public void minuteClosed(SensorEntry entry, MinuteSlot slot) {
-        // GS-109 queues the 64-byte write here.
+        // GS-110: one 64-byte write per closed minute per sensor (design-v0.2 sections 8.2 and 8.4).
+        if (history != null) {
+            history.minuteClosed(entry, slot);
+        }
     }
 
     @Override
     public void sensorExpired(UUID id, int kind) {
-        // GS-109 deletes the history file here.
+        // GS-110: retention and stale expiry take the history file with them (design-v0.2 section 4.3).
+        if (history != null) {
+            history.sensorExpired(id, kind);
+        }
     }
 }

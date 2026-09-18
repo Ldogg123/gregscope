@@ -13,6 +13,7 @@ import java.util.function.Supplier;
 
 import io.github.ldogg123.gregscope.access.TeamResolver;
 import io.github.ldogg123.gregscope.config.Settings;
+import io.github.ldogg123.gregscope.history.GapRanges;
 import io.github.ldogg123.gregscope.history.GapReason;
 import io.github.ldogg123.gregscope.history.MinuteAccumulator;
 import io.github.ldogg123.gregscope.history.MinuteRing;
@@ -50,6 +51,11 @@ public final class SensorRegistryCore {
     public static final int OVER_CAP_LRU_SIZE = 1024;
     /** Design-v0.2 section 4.3: housekeeping runs at server start and then every 72,000 ticks. */
     public static final int HOUSEKEEPING_INTERVAL_TICKS = 72_000;
+    /**
+     * How far behind its own newest timestamp the clock may fall before {@link #housekeeping()} refuses to age
+     * anything. A minute, so an ordinary NTP correction is not treated as a jump.
+     */
+    public static final long CLOCK_SKEW_TOLERANCE_SEC = 60L;
 
     private static final int SIDES = 6;
     private static final long SECONDS_PER_HOUR = 3600L;
@@ -116,8 +122,13 @@ public final class SensorRegistryCore {
     private final int serverStartEpochMinute;
 
     private RegistryEvents events = RegistryEvents.NONE;
+    /** The server runs of this world (design-v0.2 section 8.3); empty until GS-110's loader installs the stored one. */
+    private RunsTable runs = new RunsTable();
     private long duplicatesRekeyedTotal;
     private long quotaRefusedTotal;
+    private long clockSkewSkippedSweeps;
+    private long lastSkewNowEpochSec;
+    private long lastSkewNewestEpochSec;
     private boolean dirty;
     private SensorIdentity rekeyedIdentity;
 
@@ -246,6 +257,94 @@ public final class SensorRegistryCore {
     /** Valid immediately after a {@link Heartbeat#REKEYED} result: the identity the cover must store. */
     public SensorIdentity rekeyedIdentity() {
         return rekeyedIdentity;
+    }
+
+    // --- the runs table and what it is for (design-v0.2 sections 7.5 and 8.3) ---
+
+    /** Every recorded server run of this world; never null, empty until a registry is loaded. */
+    public RunsTable runs() {
+        return runs;
+    }
+
+    /**
+     * Installs the table decoded from {@code registry.dat}. {@code RunsTable.loaded} has already closed every unclean
+     * run at the stored {@code saved}, and the caller appends this process's run; that order is what turns downtime
+     * into {@code server_offline} instead of {@code unknown} (section 7.5 rule 3).
+     */
+    public void setRuns(RunsTable table) {
+        this.runs = table == null ? new RunsTable() : table;
+    }
+
+    /**
+     * The section 7.5 rule-3 context for one sensor: the resolved runs, plus what the registry knows about an
+     * UNLOADED sensor. A minute nobody recorded is {@code server_offline} outside every run, else
+     * {@code chunk_unloaded}/{@code dimension_unloaded} while the sensor has been UNLOADED since at or before it, else
+     * {@code unknown}.
+     */
+    public GapRanges.Context gapContext(UUID id, long nowEpochSec) {
+        List<GapRanges.Run> resolved = runs.resolve(nowEpochSec);
+        SensorEntry entry = byId.get(id);
+        if (entry == null || entry.state() != SensorState.UNLOADED) {
+            return GapRanges.Context.of(resolved);
+        }
+        GapReason reason = entry.lastGapReason() == GapReason.DIMENSION_UNLOADED.bit() ? GapReason.DIMENSION_UNLOADED
+            : GapReason.CHUNK_UNLOADED;
+        return GapRanges.Context.unloaded(resolved, entry.stateSinceEpochSec(), reason);
+    }
+
+    // --- loading (design-v0.2 section 8.3) ---
+
+    /**
+     * Puts an entry decoded from {@code registry.dat} back into the indexes. The caps are not consulted: what was
+     * already persisted is not refused now, and housekeeping decides what is too old. Nothing is marked dirty, because
+     * the entry is exactly what the file holds, and no {@link RegistryEvents} fires, because loading is not a
+     * transition; GS-110's loader queues the history reads itself once every service is wired.
+     *
+     * @return true if the entry was taken; false if its UUID is already known
+     * @throws IllegalArgumentException if the entry is LIVE, which section 8.3 never persists
+     */
+    public boolean restore(SensorEntry entry) {
+        if (entry == null) {
+            throw new IllegalArgumentException("entry");
+        }
+        if (entry.state() == SensorState.LIVE) {
+            throw new IllegalArgumentException("LIVE is never persisted: " + entry);
+        }
+        if (byId.containsKey(entry.id())) {
+            return false;
+        }
+        byId.put(entry.id(), entry);
+        if (entry.state()
+            .countsTowardCaps()) {
+            byPosition.put(entry.posKey(), entry.id());
+            // Section 4.2: an UNLOADED entry keeps its minute ring, its open minute and its counters, which is what
+            // the history file is merged into.
+            entry.allocateUnloadedRings(settings().intervalTicks(), serverStartEpochMinute);
+        }
+        return true;
+    }
+
+    /**
+     * Closes every open minute as a partial slot (design-v0.2 section 8.4: "close all open accumulators as partial
+     * slots" at stop). No gap reason: the minute really was observed, it was just cut short, and the seconds after it
+     * are {@code server_offline} by the runs table.
+     *
+     * @return how many minutes were closed
+     */
+    public int flushOpenMinutes() {
+        int closed = 0;
+        for (SensorEntry entry : byId.values()) {
+            MinuteAccumulator accumulator = entry.accumulator();
+            if (accumulator == null) {
+                continue;
+            }
+            MinuteSlot slot = accumulator.closePartial(null);
+            if (slot != null) {
+                storeSlot(entry, slot);
+                closed++;
+            }
+        }
+        return closed;
     }
 
     // --- heartbeat ---
@@ -571,10 +670,26 @@ public final class SensorRegistryCore {
      * {@code history.staleExpiryDays}, and the oldest tombstones beyond {@code limits.maxSensors}. O(entries), never
      * touches the world.
      *
+     * <p>
+     * <b>The clock-skew guard</b> (design-v0.2 section 15's "clock jumps" row). GS-110 attached an irreversible
+     * history-file delete to expiry, so a wall clock that is behind what the registry already recorded must not be
+     * allowed to age anything: the sweeps are skipped and counted instead, and only the cap-driven tombstone
+     * eviction runs. This catches every backwards jump, which is the one direction a healthy clock can never take
+     * here. A <em>forward</em> jump at boot is not detectable from inside the process - see the GS-110 follow-up
+     * notes in docs/design-v0.2.md.
+     *
      * @return how many entries were removed
      */
     public int housekeeping() {
         long now = clock.epochSec();
+        long newest = newestKnownEpochSec();
+        if (newest > 0L && now < newest - CLOCK_SKEW_TOLERANCE_SEC) {
+            clockSkewSkippedSweeps++;
+            lastSkewNowEpochSec = now;
+            lastSkewNewestEpochSec = newest;
+            // The cap is not a clock rule, so it still applies.
+            return evictOldestTombstones();
+        }
         Settings active = settings();
         long tombstoneAge = active.removedRetentionHours() * SECONDS_PER_HOUR;
         long staleAge = active.staleExpiryDays() * SECONDS_PER_DAY;
@@ -595,6 +710,39 @@ public final class SensorRegistryCore {
         int removed = expired.size();
         removed += evictOldestTombstones();
         return removed;
+    }
+
+    /**
+     * The newest wall-clock second the registry itself holds: any entry's {@code lastSeen} or {@code stateSince},
+     * and the runs table's newest start or stop. Nothing here can legitimately lie in the future, so {@code now}
+     * falling behind it means the clock moved backwards. 0 when the registry knows nothing yet.
+     */
+    private long newestKnownEpochSec() {
+        long newest = 0L;
+        for (SensorEntry entry : byId.values()) {
+            newest = Math.max(newest, entry.lastSeenEpochSec());
+            newest = Math.max(newest, entry.stateSinceEpochSec());
+        }
+        for (RunsTable.Row row : runs.rows()) {
+            newest = Math.max(newest, row.start());
+            newest = Math.max(newest, row.stop());
+        }
+        return newest;
+    }
+
+    /** Housekeeping sweeps refused because the clock had gone backwards. */
+    public long clockSkewSkippedSweeps() {
+        return clockSkewSkippedSweeps;
+    }
+
+    /** The {@code now} of the last refused sweep, for the log line the caller writes. 0 if there was none. */
+    public long lastSkewNowEpochSec() {
+        return lastSkewNowEpochSec;
+    }
+
+    /** What the registry already held when that sweep was refused. */
+    public long lastSkewNewestEpochSec() {
+        return lastSkewNewestEpochSec;
     }
 
     /** Design-v0.2 section 4.2: the number of tombstones is capped, and the oldest expires first. */

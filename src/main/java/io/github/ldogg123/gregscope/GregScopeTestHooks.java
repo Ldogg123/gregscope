@@ -3,6 +3,8 @@ package io.github.ldogg123.gregscope;
 import java.util.UUID;
 
 import io.github.ldogg123.gregscope.config.Settings;
+import io.github.ldogg123.gregscope.history.HistoryIo;
+import io.github.ldogg123.gregscope.history.HistoryPersistence;
 import io.github.ldogg123.gregscope.registry.SensorRegistry;
 import io.github.ldogg123.gregscope.sampling.Clock;
 import io.github.ldogg123.gregscope.sampling.TelemetrySampler;
@@ -153,6 +155,99 @@ public final class GregScopeTestHooks {
             return false;
         }
         sampler.runInterval();
+        return true;
+    }
+
+    /**
+     * Waits until the I/O thread has written everything queued so far (design-v0.2 section 13.1 {@code flushIo}), so
+     * a test can read a {@code .gsh} or {@code registry.dat} back without sleeping and guessing.
+     *
+     * @return true if the queue drained (or there is no I/O thread at all, for example with
+     *         {@code history.persist=false}); false if hooks are disabled or the flush timed out
+     */
+    public static boolean flushIo() {
+        if (!ENABLED) {
+            return false;
+        }
+        HistoryIo io = GregScope.historyIo();
+        return io == null || io.flush(HistoryIo.STOP_TIMEOUT_MILLIS);
+    }
+
+    /**
+     * Applies every finished history read now (design-v0.2 section 8.4), the way the sampler's per-interval drain
+     * does, without taking a sample. A test that wants a sensor's file created or merged before it starts recording
+     * needs exactly this and not the stray sample {@link #runIntervalNow()} would take.
+     *
+     * @return how many load results were applied, or -1 if hooks are disabled or there is no persistence service
+     */
+    public static int applyHistoryLoadsNow() {
+        if (!ENABLED) {
+            return -1;
+        }
+        HistoryPersistence history = GregScope.history();
+        return history == null ? -1 : history.drain();
+    }
+
+    /**
+     * Saves {@code registry.dat} now (design-v0.2 section 8.3), the way the overworld's {@code WorldEvent.Save} does.
+     *
+     * @param force save although nothing is dirty, as the shutdown save does
+     * @return true if a write was queued; false if hooks are disabled or there was nothing to write to
+     */
+    public static boolean saveRegistryNow(boolean force) {
+        return ENABLED && GregScope.saveRegistry(force);
+    }
+
+    /**
+     * Restarts GregScope's server services in this JVM (design-v0.2 section 14 "a simulated restart"): everything
+     * {@code serverStopping} and {@code serverStopped} do, then everything {@code serverStarting} does. The registry
+     * and the minute rings are therefore rebuilt from {@code registry.dat} and the {@code .gsh} files that were just
+     * written, which is the only way to prove the restart path without stopping a Horizon-QA server.
+     *
+     * <p>
+     * The clock and any settings override survive on purpose, so a test can keep its fake clock across the restart.
+     * The covers in the world keep their identity, so they re-register on their next heartbeat.
+     *
+     * @return true if applied, false if hooks are disabled
+     */
+    public static boolean simulateRestart() {
+        if (!ENABLED) {
+            return false;
+        }
+        GregScope.simulateRestart();
+        return true;
+    }
+
+    /**
+     * The first half of {@link #simulateRestart()}: everything {@code serverStopping} and {@code serverStopped} do to
+     * GregScope's own services - partial minutes closed, the run closed, the registry written, the I/O thread flushed
+     * and joined. A test that wants downtime <em>between</em> the two runs (so the minutes in between read as
+     * {@code server_offline}, design-v0.2 section 7.5 rule 3) calls this, moves its fake clock, then
+     * {@link #startServicesNow()}.
+     *
+     * @return true if applied, false if hooks are disabled
+     */
+    public static boolean stopServicesNow() {
+        if (!ENABLED) {
+            return false;
+        }
+        GregScope.finalizeServices();
+        GregScope.stopServices();
+        return true;
+    }
+
+    /**
+     * The second half of {@link #simulateRestart()}: everything {@code serverStarting} does - the I/O thread,
+     * {@code registry.dat} read back, this run appended to the runs table, the sampler, housekeeping and the history
+     * reads.
+     *
+     * @return true if applied, false if hooks are disabled
+     */
+    public static boolean startServicesNow() {
+        if (!ENABLED) {
+            return false;
+        }
+        GregScope.startServices();
         return true;
     }
 

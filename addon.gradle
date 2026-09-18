@@ -25,6 +25,11 @@ tasks.named("processGametestResources", ProcessResources) {
     from("docs/examples/gregscope-snapshot.lua") {
         into("gregscope-gametest")
     }
+    // GS-109: RegistryCodecTests decodes the golden registry.dat that tools/gen_fixtures.py writes. Copy the exact
+    // unit-test fixture instead of keeping a second copy that could drift.
+    from("src/test/resources/fixtures/v1") {
+        into("gregscope-gametest/fixtures/v1")
+    }
 }
 
 configurations {
@@ -46,5 +51,10 @@ dependencies {
         // `runServer --mcJvmArgs=...` gets it too (a JavaExec system property, independent of --mcJvmArgs).
         // LifecycleTests.testHooksReachGametestJvm asserts it arrived.
         systemProperty("gregscope.testHooks", "true")
+        // GS-109: "the server thread does no file I/O" is an `assert` in NioFileStore, which does nothing without
+        // -ea. The dev JVM runs without assertions (observed: RegistryCodecTests logged "assertions are off"), so
+        // enable them for GregScope's own packages only - Forge, GT, MUI2 and MC keep running with assertions off,
+        // which is how they are shipped and tested. RegistryCodecTests.theServerThreadCannotWriteAFile needs this.
+        jvmArgs("-ea:io.github.ldogg123.gregscope...")
     }
 }

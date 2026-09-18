@@ -7,15 +7,19 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.world.WorldEvent;
 
 import com.gtnewhorizons.horizonqa.api.GameTestHelper;
 import com.gtnewhorizons.horizonqa.api.TestPos;
@@ -32,6 +36,8 @@ import cpw.mods.fml.common.registry.GameRegistry;
 import gregtech.api.enums.ItemList;
 import io.github.ldogg123.gregscope.GregScope;
 import io.github.ldogg123.gregscope.GregScopeTestHooks;
+import io.github.ldogg123.gregscope.GregScopeWorldEvents;
+import io.github.ldogg123.gregscope.hub.TileTelemetryHub;
 import io.github.ldogg123.gregscope.integration.opencomputers.GregTechMachineEnvironment;
 import io.github.ldogg123.gregscope.sampling.SamplerStats;
 import io.github.ldogg123.gregscope.sampling.TelemetryFrame;
@@ -47,11 +53,14 @@ import li.cil.oc.api.network.ManagedEnvironment;
  * does nothing while no sensor is LIVE. This is not a benchmark; nothing is timed.
  *
  * <p>
- * GS-108 changed what these tests assert, deliberately. Before it, no GregScope object was subscribed to any bus. Now
- * exactly one is: {@code TelemetrySampler}, on the FML bus (where 1.7.10 posts {@code ServerTickEvent}), with exactly
- * one {@code @SubscribeEvent} method taking a {@code ServerTickEvent}. Everything else is unchanged: no listener on
- * any Forge bus, no registered or loaded GregScope tile entity, no world generator, and no ticking OpenComputers
- * environment.
+ * GS-108 and GS-110 changed what these tests assert, deliberately. Before GS-108, no GregScope object was subscribed
+ * to any bus. Now exactly two are, and no more: {@code TelemetrySampler} on the FML bus (where 1.7.10 posts
+ * {@code ServerTickEvent}), with exactly one {@code @SubscribeEvent} method taking a {@code ServerTickEvent}; and
+ * {@code GregScopeWorldEvents} on the Forge bus, with exactly two {@code @SubscribeEvent} methods taking
+ * {@code WorldEvent.Save} and {@code WorldEvent.Unload} (design-v0.2 sections 8.3 and 8.4). Neither is periodic: a
+ * world save happens when Minecraft writes the world, and dimension 0 unloads only while the server stops. Everything
+ * else is unchanged: nothing on the terrain or ore generation buses, no registered or loaded GregScope tile entity, no
+ * world generator, and no ticking OpenComputers environment.
  *
  * <p>
  * Reflection here reads Forge, FML and OpenComputers internals that have no public accessor. It is test code only;
@@ -82,35 +91,58 @@ public class IdleCostTests {
         helper.assertTrue(Loader.isModLoaded(GregScope.MODID), "GregScope is not loaded");
 
         int listenerObjects = 0;
-        listenerObjects += assertGregScopeListeners(helper, "MinecraftForge.EVENT_BUS", MinecraftForge.EVENT_BUS, 0);
+        // GS-110 (design-v0.2 sections 8.3 and 8.4): exactly one, the overworld save/unload persistence hook.
+        listenerObjects += assertGregScopeListeners(
+            helper,
+            "MinecraftForge.EVENT_BUS",
+            MinecraftForge.EVENT_BUS,
+            1,
+            GregScopeWorldEvents.class);
         listenerObjects += assertGregScopeListeners(
             helper,
             "MinecraftForge.TERRAIN_GEN_BUS",
             MinecraftForge.TERRAIN_GEN_BUS,
-            0);
+            0,
+            null);
         listenerObjects += assertGregScopeListeners(
             helper,
             "MinecraftForge.ORE_GEN_BUS",
             MinecraftForge.ORE_GEN_BUS,
-            0);
+            0,
+            null);
         // GS-108 (design-v0.2 section 1.4): exactly one, the sampler.
         listenerObjects += assertGregScopeListeners(
             helper,
             "FMLCommonHandler.bus()",
             FMLCommonHandler.instance()
                 .bus(),
-            1);
+            1,
+            TelemetrySampler.class);
         // GT, OC and Forge itself subscribe many listeners; zero would mean the scan is broken.
         helper.assertTrue(listenerObjects > 10, "event bus scan found only " + listenerObjects + " listener objects");
 
+        // GS-112 (design-v0.2 section 1.4 lifts "no tile entities" for the Telemetry Hub): exactly one GregScope
+        // class is registered, and it is the Hub's. Everything else shipped stays out of the registry.
         int tileEntityClasses = 0;
+        // TileEntity keeps two maps (name -> class and class -> name), so the same class turns up twice; count the
+        // distinct GregScope ones.
+        Set<String> gregScopeTileClasses = new HashSet<>();
         for (Object element : staticCollectionElements(helper, TileEntity.class)) {
             if (element instanceof Class) {
                 tileEntityClasses++;
-                assertNotShipped(helper, "registered tile entity class", ((Class<?>) element).getName());
+                String name = ((Class<?>) element).getName();
+                if (isShipped(name)) {
+                    gregScopeTileClasses.add(name);
+                } else {
+                    assertNotShipped(helper, "registered tile entity class", name);
+                }
             }
         }
         helper.assertTrue(tileEntityClasses > 50, "tile entity registry scan found only " + tileEntityClasses);
+        helper.assertIterableEquals(
+            Collections.singletonList(TileTelemetryHub.class.getName()),
+            new ArrayList<>(gregScopeTileClasses),
+            "GregScope tile entity classes in the registry");
 
         for (Object element : staticCollectionElements(helper, GameRegistry.class)) {
             assertNotShipped(
@@ -120,6 +152,9 @@ public class IdleCostTests {
                     .getName());
         }
 
+        // Still zero *loaded* tile entities: World.addTileEntity and World.setTileEntity only add a tile whose
+        // canUpdate() is true (World.java:4405-4412 and :2834-2841), and the Hub's answers false. A Hub placed in the
+        // world therefore never joins a tick list, which HubBlockTests asserts on a Hub it has just placed.
         int loadedTiles = 0;
         for (WorldServer world : MinecraftServer.getServer().worldServers) {
             for (Object tile : world.loadedTileEntityList) {
@@ -222,6 +257,36 @@ public class IdleCostTests {
     }
 
     /**
+     * GS-110, design-v0.2 sections 8.3 and 8.4: the Forge-bus hook subscribes to exactly the two world events the
+     * design names, and to nothing that fires per tick. {@code WorldEvent.PotentialSpawns} is a {@code WorldEvent}
+     * too and fires several times per chunk per tick, so a handler taking the base class would put GregScope on a hot
+     * path; this asserts that no handler takes it.
+     */
+    @GameTest(batch = BATCH)
+    public static void exactlyTwoWorldEventHandlers(GameTestHelper helper) {
+        List<Method> handlers = new ArrayList<>();
+        for (Method method : GregScopeWorldEvents.instance()
+            .getClass()
+            .getMethods()) {
+            if (method.isAnnotationPresent(SubscribeEvent.class)) {
+                handlers.add(method);
+            }
+        }
+        helper.assertEquals(2, handlers.size(), "@SubscribeEvent methods on the world event hook: " + handlers);
+        List<Class<?>> taken = new ArrayList<>();
+        for (Method handler : handlers) {
+            helper.assertEquals(1, handler.getParameterTypes().length, "handler arity: " + handler);
+            Class<?> type = handler.getParameterTypes()[0];
+            helper.assertNotSame(WorldEvent.class, type, "a handler takes WorldEvent itself: " + handler);
+            taken.add(type);
+        }
+        helper.assertTrue(taken.contains(WorldEvent.Save.class), "no WorldEvent.Save handler: " + handlers);
+        helper.assertTrue(taken.contains(WorldEvent.Unload.class), "no WorldEvent.Unload handler: " + handlers);
+        System.out.println("[GregScope gametest] idle#5 two @SubscribeEvent world handlers: " + handlers);
+        helper.succeed();
+    }
+
+    /**
      * GS-108: with no LIVE sensor the tick handler does no per-sensor work at all. The registry is emptied and a whole
      * interval is then run inside one server tick, so no cover can heartbeat in between and register itself again.
      */
@@ -273,7 +338,8 @@ public class IdleCostTests {
      * Asserts that exactly {@code expected} of the bus's listeners belong to GregScope, counted two independent ways
      * (the listener object's class and the owning mod container), and returns the number of listener objects seen.
      */
-    private static int assertGregScopeListeners(GameTestHelper helper, String label, EventBus bus, int expected) {
+    private static int assertGregScopeListeners(GameTestHelper helper, String label, EventBus bus, int expected,
+        Class<?> expectedType) {
         Map<?, ?> listeners = (Map<?, ?>) readField(helper, bus, EventBus.class, "listeners");
         Map<?, ?> owners = (Map<?, ?>) readField(helper, bus, EventBus.class, "listenerOwners");
         List<Object> ours = new ArrayList<>();
@@ -295,8 +361,16 @@ public class IdleCostTests {
         }
         helper.assertEquals(expected, owned, label + " listeners owned by the gregscope mod container");
         if (expected > 0) {
-            helper.assertInstanceOf(TelemetrySampler.class, ours.get(0), label + " GregScope listener");
-            helper.assertSame(GregScope.sampler(), ours.get(0), "the subscribed sampler is not GregScope.sampler()");
+            helper.assertInstanceOf(expectedType, ours.get(0), label + " GregScope listener");
+            if (expectedType == TelemetrySampler.class) {
+                helper
+                    .assertSame(GregScope.sampler(), ours.get(0), "the subscribed sampler is not GregScope.sampler()");
+            } else {
+                helper.assertSame(
+                    GregScopeWorldEvents.instance(),
+                    ours.get(0),
+                    "the subscribed hook is not GregScopeWorldEvents.instance()");
+            }
         }
         return listeners.size();
     }

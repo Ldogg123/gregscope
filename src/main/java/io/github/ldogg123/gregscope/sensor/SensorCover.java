@@ -30,4 +30,18 @@ public interface SensorCover {
      * cover's description (design-v0.2 section 3.4). Transient and never saved; {@code null} clears it.
      */
     void setAvailability(String availability);
+
+    /**
+     * Writes a label into the cover NBT, which design-v0.2 section 3.5 makes the source of truth: the identity keeps
+     * its UUID, owner and creation time, the holder is marked dirty, and the caller mirrors the value into the
+     * registry. The text must already be sanitized ({@link Labels#sanitize}); the identity re-sanitizes it anyway.
+     * The registry calls this on the server thread for a LIVE sensor whose cover it has just resolved, which is why
+     * a label write never loads a chunk.
+     *
+     * <p>
+     * Kind-agnostic on purpose (design-v0.3 section 5.1 A2): a v0.3 flow meter is labelled exactly the same way.
+     *
+     * @return true if the label was written; false for an inert cover, a cover without a holder, or the client side
+     */
+    boolean setLabel(String label);
 }
