@@ -408,10 +408,12 @@ class PersistenceScenarioTest {
         assertEquals(0, store.quarantined(), "a read that threw renames nothing");
         assertArrayEquals(onDisk, store.history(SENSOR), "the file on disk was touched");
 
-        // The next drain asks again, and this time the disk answers.
-        second.history.drain();
+        // The next drain asks again, and this time the disk answers. drain() queues the retry and then takes whatever
+        // the I/O thread has finished, so a fast thread can answer inside that same call; both orders are correct.
+        int applied = second.history.drain();
         flush();
-        assertEquals(1, second.history.drain(), "the retried load was not applied");
+        applied += second.history.drain();
+        assertEquals(1, applied, "the retried load was not applied");
         assertTrue(restored.historyLoaded(), "the retry must finish the job");
         assertEquals(MINUTES, second.history.slotsMerged(), "the history is back");
         assertEquals(0, second.history.filesCreated(), "an existing file must not be recreated");
