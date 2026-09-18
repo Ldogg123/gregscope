@@ -1,4 +1,46 @@
-# Flow meters (v0.3) — spike notes
+# Flow meters (v0.3) — spike notes and the decision to stop
+
+> **Status: v0.3 flow meters are CANCELLED (2026-09-18), by the project owner, on product grounds.**
+>
+> S1 passed: exact counting is technically achievable, and the evidence for that is kept below because it is what
+> the decision rests on. The reason for stopping is not that it could not be built.
+>
+> **A meter only sees what flows through the meter.** In GTNH a machine is fed by GT pipes, EnderIO conduits, AE2
+> interfaces, ME stocking hatches, and more. A cover-based meter measures one of those routes and is blind to the
+> rest, so a Hub would report "fluid in: 0" for a machine that is running perfectly well on an AE2 hatch. That does
+> not read as *unmeasured* - it reads as **broken**, and a telemetry mod that reports confident wrong numbers is
+> worse than one that reports nothing. The numbers would also only be complete for players who rebuilt their
+> factory around GregScope's covers, which inverts the point of a read-only observability mod.
+>
+> Whether a feed-agnostic alternative exists was checked before deciding, not assumed:
+>
+> | Route | Verdict |
+> |---|---|
+> | Read the machine's running recipe and multiply by completions | **No.** `mLastRecipe` is `protected` on `MTEBasicMachine` and multiblocks have no equivalent. Reaching it needs reflection, which shipped code forbids. |
+> | Cumulative throughput counters on the machine | **No.** GT keeps none. |
+> | Tank-level deltas on the machine | **No, for throughput.** A level that fell by 500 may be 500 consumed, or 1000 consumed while 500 arrived. Ambiguous by construction. |
+> | Reading the machine's **buffers** | **Yes** - see below. This is feed-agnostic but answers a different question. |
+>
+> So there is no honest way to measure throughput without dictating how the player plumbs their base. Stopping is
+> the right call.
+
+## What replaces it, and what it can honestly claim
+
+`MTEMultiBlockBase.getStoredFluids()` is public, as are `getFillableStack`/`getDrainableStack`/`getTankInfo` on
+basic machines. Those report what is **in** the machine, whoever put it there - GT pipe, EnderIO conduit, AE2 hatch
+or a player's hand. v0.2's snapshot has 42 keys and not one of them is a fluid or an item, so this is entirely
+unmeasured today.
+
+- **It can say:** what a machine is holding, and whether that is rising or falling. A falling input buffer on a
+  machine that is `running` is a genuine starvation predictor, and it composes with the state telemetry v0.2
+  already has - which is the half that turned out to be worth having.
+- **It cannot say:** throughput, rate, or who supplied it. Those stay unmeasurable, and the documentation must say
+  so rather than let a chart imply otherwise.
+
+That is a different and smaller feature than flow meters, and a more honest one.
+
+---
+
 
 Design: [design-v0.3.md](design-v0.3.md). This file carries the go/no-go findings the spike (GS-202) is required to
 produce, written as they are measured rather than at the end.

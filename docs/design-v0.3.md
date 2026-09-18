@@ -1,5 +1,20 @@
 # GregScope v0.3: flow meters, final design
 
+> **CANCELLED 2026-09-18.** This design is not being built. It is kept because the spike's findings are worth
+> having and because the reasoning for stopping should be readable next to what it stopped.
+>
+> The GS-202 spike's S1 gate **passed** - exact counting is achievable and is proven by a parity test against GT's
+> own `moveFluid`. The reason for cancelling is a product one, from the project owner: **a cover-based meter only
+> sees what flows through the cover.** A GTNH machine is fed by GT pipes, EnderIO conduits, AE2 interfaces and ME
+> stocking hatches, so a meter is blind to most real setups and would report "fluid in: 0" for a machine that is
+> running fine. Confident wrong numbers are worse than no numbers.
+>
+> Feed-agnostic alternatives were checked, not assumed: the running recipe is `protected` and unreachable without
+> reflection, GT keeps no cumulative throughput counters, and tank-level deltas cannot separate consumption from
+> refill. See [flow-meters.md](flow-meters.md) for the evidence and for what is proposed instead - reading the
+> machine's own buffers, which is feed-agnostic but answers "is this starving?" rather than "how much flowed?".
+
+
 Status: final synthesis, 2026-09-17. It builds on `docs/design-v0.2.md` (M1 in progress) and does not break any v0.2 format.
 
 **Pins:** GT5U 5.09.54.133, GTNHLib 0.11.46, ModularUI2 2.3.88-1.7.10, Horizon-QA 0.14.0, OC 1.12.61-GTNH.
