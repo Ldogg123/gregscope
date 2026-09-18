@@ -1,7 +1,9 @@
 package io.github.ldogg123.gregscope.gametest;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import net.minecraft.tileentity.TileEntity;
@@ -19,6 +21,7 @@ import li.cil.oc.api.network.Component;
 import li.cil.oc.api.network.Environment;
 import li.cil.oc.api.network.ManagedEnvironment;
 import li.cil.oc.api.network.Node;
+import li.cil.oc.api.network.Visibility;
 
 /** Builds OpenComputers components the way an Adapter does and converts callback results for assertions. */
 final class OcComponents {
@@ -58,6 +61,40 @@ final class OcComponents {
         helper.assertTrue(node != null && node.network() != null, "Adapter node not in a network yet");
         Component found = findAdapterSnapshotComponent(helper, adapter);
         helper.assertNotNull(found, "Adapter exposes no merged component with getSnapshot");
+        return found;
+    }
+
+    /**
+     * The one <em>merged</em> component a placed Adapter exposes that carries {@code method}, or null if it exposes
+     * none (yet). Fails if more than one does. GS-116 uses it for the {@code gregscope_hub} component of a Telemetry
+     * Hub.
+     *
+     * <p>
+     * Every environment behind an Adapter appears twice among the reachable nodes: once as the merged
+     * {@code CompoundBlockEnvironment} a computer calls, and once as the environment's own node, which the compound
+     * forces to {@code Visibility.Neighbors} ({@code oc/li/cil/oc/server/driver/CompoundBlockEnvironment.scala:24-28}).
+     * Only the merged one keeps {@code Visibility.Network}, so that is the discriminator here - unlike
+     * {@link #findAdapterSnapshotComponent}, which can pick the merged component out by asking for a method from each
+     * of two drivers.
+     */
+    static Component findAdapterComponentWith(GameTestHelper helper, Environment adapter, String method) {
+        Node node = adapter.node();
+        if (node == null || node.network() == null) {
+            return null;
+        }
+        Component found = null;
+        for (Node reachable : node.reachableNodes()) {
+            if (!(reachable instanceof Component)) {
+                continue;
+            }
+            Component component = (Component) reachable;
+            if (component.visibility() != Visibility.Network || !component.methods()
+                .contains(method)) {
+                continue;
+            }
+            helper.assertNull(found, "more than one merged component with " + method + " on the Adapter");
+            found = component;
+        }
         return found;
     }
 
@@ -110,6 +147,39 @@ final class OcComponents {
             helper.fail(method + " threw " + e);
             return null;
         }
+    }
+
+    /**
+     * Invokes a callback with arguments, the way a Lua program would. OpenComputers wraps them in its own
+     * {@code ArgumentsImpl}, so {@code optString}/{@code optInteger} see exactly what a computer would pass.
+     */
+    static Object[] invoke(GameTestHelper helper, Component component, String method, Object... args) {
+        try {
+            return component.invoke(method, new StubContext(), args);
+        } catch (Exception e) {
+            helper.fail(method + Arrays.asList(args) + " threw " + e);
+            return null;
+        }
+    }
+
+    /**
+     * A Lua sequence as a Java list. OpenComputers converts a {@code java.util.List} result into an
+     * {@code Object[]} ({@code oc/li/cil/oc/server/driver/Registry.scala:248-255}); a plain list and a Scala
+     * sequence are accepted too, so this helper does not depend on which path produced it.
+     */
+    static List<Object> asList(GameTestHelper helper, Object value, String what) {
+        if (value instanceof Object[]) {
+            return Arrays.asList((Object[]) value);
+        }
+        if (value instanceof List) {
+            return new ArrayList<Object>((List<?>) value);
+        }
+        if (value instanceof scala.collection.Seq) {
+            return new ArrayList<Object>(
+                scala.collection.JavaConversions.seqAsJavaList((scala.collection.Seq<?>) value));
+        }
+        helper.fail(what + " is not a sequence but " + (value == null ? "null" : value.getClass()));
+        return null;
     }
 
     /** OC converts Java maps into Scala maps before returning them; normalise either form to a Java map. */

@@ -113,8 +113,20 @@ class ShippedClassesTest {
         ROOT + "hub/BlockTelemetryHub",
         ROOT + "hub/TileTelemetryHub",
         ROOT + "hub/TelemetryHubs",
+        // GS-114 Telemetry Hub GUI: the PacketBuffer half of the DTO seam, the panel and the per-viewer session.
+        ROOT + "hub/HubPacketIo",
+        ROOT + "hub/HubPanel",
+        ROOT + "hub/HubSession",
+        // GS-114 follow-up: the FML logout hook that releases a Hub view slot a disconnect would otherwise keep.
+        ROOT + "hub/HubViewLifecycle",
         ROOT + "integration/opencomputers/GregTechMachineEnvironment",
         ROOT + "integration/opencomputers/GregTechMachineDriver",
+        // GS-115 OpenComputers additions: the pure builders of the section 10.1 record and the section 10.4 history.
+        ROOT + "integration/opencomputers/LuaTables",
+        // GS-116 gregscope_hub: the driver, the final environment and the pure scope they hand to the builders.
+        ROOT + "integration/opencomputers/HubDriver",
+        ROOT + "integration/opencomputers/HubEnvironment",
+        ROOT + "integration/opencomputers/HubScope",
         ROOT + "probe/GregTechMachineProbe",
         ROOT + "probe/StateClassifier",
         ROOT + "model/MachineSnapshot");
@@ -122,6 +134,18 @@ class ShippedClassesTest {
     private static final List<String> CLIENT_PACKAGES = Arrays
         .asList("net/minecraft/client/", "cpw/mods/fml/client/", "net.minecraft.client.", "cpw.mods.fml.client.");
     private static final String SIDE_ONLY = "Lcpw/mods/fml/relauncher/SideOnly;";
+
+    /**
+     * Design-v0.2 section 1.4 allows client code in {@code @SideOnly(CLIENT)} methods, {@code createScreen} and
+     * {@code ClientProxy}. GS-114 is the ticket that needs it: {@code IGuiHolder.createScreen} returns a
+     * {@code ModularScreen}, a class that draws, so the method must be stripped on a dedicated server. The lift is
+     * exactly <b>one class</b>, and the denylist above still applies to it: not even this class may name a
+     * {@code net.minecraft.client} or {@code cpw.mods.fml.client} type, because the whole point is that the server
+     * never has to resolve one. That the annotation sits on {@code createScreen} <em>alone</em> is checked on the
+     * running server by {@code HubGuiServerTests.buildUiOnDedicatedServer}, which asks FML's own
+     * {@code SideTransformer} what is left of the class: this reader sees the constant pool, not the method table.
+     */
+    private static final String CLIENT_SCREEN = ROOT + "hub/TileTelemetryHub";
 
     /**
      * References that periodic work would need in 1.7.10: event bus subscriptions (tick events arrive on the FML bus),
@@ -222,6 +246,24 @@ class ShippedClassesTest {
         "cpw/mods/fml/common/eventhandler/EventBus",
         "net/minecraftforge/common/MinecraftForge");
 
+    /**
+     * The GS-114 follow-up lifts the FML-bus part of {@link #PERIODIC_WORK_REFERENCES} for <b>exactly one more</b>
+     * class: {@code HubViewLifecycle} releases a viewer's slot of the design-v0.2 §9.1 open-view cap when that player
+     * leaves, because ModularUI2's panel close listener only runs on the client's {@code CloseGuiPacket} and a
+     * disconnect never sends one. A logout is not periodic work - once per player per session - but
+     * {@code PlayerEvent.PlayerLoggedOutEvent} is posted on the FML bus, which until now only the sampler could name.
+     * The lift is exactly {@code FMLCommonHandler}, the bus type and {@code SubscribeEvent}: the <b>tick event</b>,
+     * {@code MinecraftForge}, {@code GameRegistry}, world generators, threads, timers and executors stay forbidden
+     * here, which {@link #theOnlyLogoutHandlerIsTheHubViewRelease()} checks together with the one event it really
+     * subscribes to.
+     */
+    private static final String VIEW_LIFECYCLE = ROOT + "hub/HubViewLifecycle";
+    private static final List<String> VIEW_LIFECYCLE_REFERENCES = Arrays.asList(
+        "cpw/mods/fml/common/eventhandler/SubscribeEvent",
+        "cpw/mods/fml/common/eventhandler/EventBus",
+        "cpw/mods/fml/common/FMLCommonHandler");
+    private static final String LOGOUT_EVENT = "cpw/mods/fml/common/gameevent/PlayerEvent$PlayerLoggedOutEvent";
+
     private static TreeMap<String, ClassInfo> classes;
 
     @BeforeAll
@@ -295,11 +337,61 @@ class ShippedClassesTest {
                     }
                 }
             }
-            if (info.utf8.contains(SIDE_ONLY) && info.utf8.contains("CLIENT")) {
+            if (info.utf8.contains(SIDE_ONLY) && info.utf8.contains("CLIENT") && !CLIENT_SCREEN.equals(info.name)) {
                 violations.add(info.name + " uses @SideOnly(CLIENT)");
             }
         }
         assertEquals(new ArrayList<String>(), violations, "client-only references in shipped classes");
+    }
+
+    /**
+     * Design-v0.2 section 1.3 and section 9.3: v0.2 has <b>no machine control</b>, and the Hub GUI in particular has
+     * "no {@code registerSyncedAction}". A synced action is the one ModularUI2 mechanism that runs arbitrary server
+     * code on a client packet, so no shipped class may name it - or invoke one - at all. The Hub's four C2S values
+     * are numbers and a string that the server's own setters validate, which is a different thing.
+     */
+    @Test
+    void noShippedClassRegistersASyncedAction() {
+        List<String> forbidden = Arrays.asList(
+            "registerSyncedAction",
+            "registerClientSyncedAction",
+            "registerServerSyncedAction",
+            "callSyncedAction");
+        List<String> violations = new ArrayList<>();
+        for (ClassInfo info : classes.values()) {
+            for (String utf8 : info.utf8) {
+                if (forbidden.contains(utf8)) {
+                    violations.add(info.name + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), violations, "synced actions in shipped classes");
+    }
+
+    /**
+     * The GS-114 client lift is narrow: {@code TileTelemetryHub} really does carry {@code @SideOnly(CLIENT)} (so the
+     * skip in {@code noClientClassReferences} cannot pass vacuously), it carries it for {@code createScreen} and
+     * names {@code ModularScreen}, it still names no {@code net.minecraft.client} or {@code cpw.mods.fml.client}
+     * type - which {@code noClientClassReferences} enforces for every class, this one included - and no other shipped
+     * class uses the annotation at all.
+     */
+    @Test
+    void theOnlyClientOnlyClassIsTheHubTileEntity() {
+        ClassInfo tile = classes.get(CLIENT_SCREEN);
+        assertTrue(tile != null, "the Hub tile entity was not scanned: " + CLIENT_SCREEN);
+        assertTrue(tile.utf8.contains(SIDE_ONLY), CLIENT_SCREEN + " no longer uses @SideOnly; narrow the lift");
+        assertTrue(tile.utf8.contains("CLIENT"), CLIENT_SCREEN + " no longer names the CLIENT side; narrow the lift");
+        assertTrue(tile.utf8.contains("createScreen"), CLIENT_SCREEN + " does not declare createScreen");
+        assertTrue(
+            tile.utf8.contains("com/cleanroommc/modularui/screen/ModularScreen"),
+            CLIENT_SCREEN + " does not name ModularScreen, so createScreen cannot be building one");
+        List<String> others = new ArrayList<>();
+        for (ClassInfo info : classes.values()) {
+            if (!info.name.equals(CLIENT_SCREEN) && info.utf8.contains(SIDE_ONLY)) {
+                others.add(info.name + " uses @SideOnly");
+            }
+        }
+        assertEquals(new ArrayList<String>(), others, "shipped classes other than the Hub tile entity using @SideOnly");
     }
 
     @Test
@@ -319,6 +411,9 @@ class ShippedClassesTest {
                         continue;
                     }
                     if (WORLD_EVENTS.equals(info.name) && WORLD_EVENT_REFERENCES.contains(reference)) {
+                        continue;
+                    }
+                    if (VIEW_LIFECYCLE.equals(info.name) && VIEW_LIFECYCLE_REFERENCES.contains(reference)) {
                         continue;
                     }
                     if (utf8.contains(reference)) {
@@ -442,7 +537,9 @@ class ShippedClassesTest {
     /**
      * The GS-108 lift is narrow too: the sampler really is a {@code ServerTickEvent} handler on the FML bus (so the
      * skip in {@code noPeriodicWorkHooks} cannot pass vacuously), and no other shipped class names any of the four
-     * tick references, which {@code noPeriodicWorkHooks} enforces for every class but this one. That there is exactly
+     * tick references, which {@code noPeriodicWorkHooks} enforces for every class but this one and
+     * {@code HubViewLifecycle} - and that one may name the bus but never {@code TickEvent}, which is the part that
+     * matters here. That there is exactly
      * <b>one</b> {@code @SubscribeEvent} method, and that it takes a {@code ServerTickEvent}, is checked on the
      * running server by {@code IdleCostTests.exactlyOneServerTickHandler}: this reader sees the constant pool, not the
      * method table.
@@ -579,6 +676,59 @@ class ShippedClassesTest {
             }
         }
         assertEquals(new ArrayList<String>(), others, "shipped classes other than the hook reaching the Forge bus");
+    }
+
+    /**
+     * The GS-114 follow-up lift is narrow too: {@code HubViewLifecycle} really does subscribe to the FML bus (so the
+     * skip in {@code noPeriodicWorkHooks} cannot pass vacuously), it names the one logout event and no other event,
+     * the tick event in particular stays forbidden for it, and no other shipped class names the logout event. That
+     * there is exactly <b>one</b> {@code @SubscribeEvent} method and that the running server holds exactly this one
+     * extra FML-bus listener is checked by {@code IdleCostTests}: this reader sees the constant pool, not the method
+     * table.
+     */
+    @Test
+    void theOnlyLogoutHandlerIsTheHubViewRelease() {
+        ClassInfo hook = classes.get(VIEW_LIFECYCLE);
+        assertTrue(hook != null, "the logout hook was not scanned: " + VIEW_LIFECYCLE);
+        for (String reference : VIEW_LIFECYCLE_REFERENCES) {
+            boolean seen = false;
+            for (String utf8 : hook.utf8) {
+                seen |= utf8.contains(reference);
+            }
+            assertTrue(seen, VIEW_LIFECYCLE + " no longer references " + reference + "; narrow the lift");
+        }
+        assertTrue(
+            hook.utf8.contains("Lcpw/mods/fml/common/eventhandler/SubscribeEvent;"),
+            "the logout hook has no @SubscribeEvent annotation");
+        boolean namesLogout = false;
+        for (String utf8 : hook.utf8) {
+            namesLogout |= utf8.contains(LOGOUT_EVENT);
+        }
+        assertTrue(namesLogout, "the logout hook does not name " + LOGOUT_EVENT);
+        // The lift is only about the three FML-bus references: ticks, the Forge bus, threads, timers and executors
+        // stay forbidden here.
+        List<String> violations = new ArrayList<>();
+        for (String utf8 : hook.utf8) {
+            for (String reference : PERIODIC_WORK_REFERENCES) {
+                if (!VIEW_LIFECYCLE_REFERENCES.contains(reference) && utf8.contains(reference)) {
+                    violations.add(VIEW_LIFECYCLE + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), violations, "the logout hook may only use the FML bus");
+        // And nothing else may subscribe to a logout: one class owns the release, so one place can leak it.
+        List<String> others = new ArrayList<>();
+        for (ClassInfo info : classes.values()) {
+            if (info.name.equals(VIEW_LIFECYCLE)) {
+                continue;
+            }
+            for (String utf8 : info.utf8) {
+                if (utf8.contains(LOGOUT_EVENT)) {
+                    others.add(info.name + " references " + utf8);
+                }
+            }
+        }
+        assertEquals(new ArrayList<String>(), others, "shipped classes other than the hook naming the logout event");
     }
 
     /** A negative control for the scanner itself: it must see what it looks for in a real class file. */

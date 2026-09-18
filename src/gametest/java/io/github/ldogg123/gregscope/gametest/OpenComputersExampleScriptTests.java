@@ -3,10 +3,6 @@ package io.github.ldogg123.gregscope.gametest;
 import static com.gtnewhorizons.horizonqa.api.TestPos.at;
 import static gregtech.api.util.GTRecipeConstants.COIL_HEAT;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -15,9 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import net.minecraft.init.Blocks;
-import net.minecraft.inventory.IInventory;
 import net.minecraft.item.ItemStack;
-import net.minecraft.tileentity.TileEntity;
 
 import com.gtnewhorizons.horizonqa.api.GameTestArguments;
 import com.gtnewhorizons.horizonqa.api.GameTestHelper;
@@ -32,17 +26,7 @@ import gregtech.api.enums.ItemList;
 import gregtech.api.enums.TierEU;
 import gregtech.api.interfaces.tileentity.IGregTechTileEntity;
 import gregtech.api.metatileentity.implementations.MTEMultiBlockBase;
-import li.cil.oc.api.Items;
-import li.cil.oc.api.Network;
-import li.cil.oc.api.detail.ItemInfo;
-import li.cil.oc.api.driver.item.MutableProcessor;
-import li.cil.oc.api.internal.Case;
 import li.cil.oc.api.machine.Architecture;
-import li.cil.oc.api.machine.Machine;
-import li.cil.oc.api.network.Component;
-import li.cil.oc.api.network.Connector;
-import li.cil.oc.api.network.Node;
-import li.cil.oc.server.machine.luac.LuaStateFactory;
 import li.cil.oc.server.machine.luac.NativeLua52Architecture;
 import li.cil.oc.server.machine.luac.NativeLua53Architecture;
 import li.cil.oc.server.machine.luac.NativeLua54Architecture;
@@ -53,10 +37,10 @@ import li.cil.oc.server.machine.luaj.LuaJLuaArchitecture;
  * booting the stock OpenOS floppy, headless, and checks its printed output against GregScope's probe.
  *
  * <p>
- * Gradle copies the repo file byte for byte into the game test resources. Java writes it and a small runner
- * ({@code gregscope-gametest/autorun.lua}) onto the computer's hard drive through OC's filesystem callbacks, starts the
- * computer and polls every server tick for the runner's status marker, then reads the captured output back through
- * the same callbacks.
+ * {@link OpenOsComputer} builds and drives the computer: Gradle copies the repo file byte for byte into the game test
+ * resources, Java writes it onto the computer's hard drive through OC's filesystem callbacks, starts the computer and
+ * reads the captured output back. What is left here is the scenario and the expected output; GS-116 moved the rest out
+ * so {@code HubExampleScriptTests} could run {@code docs/examples/gregscope-hub.lua} the same way.
  */
 @GameTestHolder(value = "gregscope", requiredMods = { "gregtech", "OpenComputers", "gregscope" })
 public class OpenComputersExampleScriptTests {
@@ -84,38 +68,9 @@ public class OpenComputersExampleScriptTests {
     private static final double EBF_PROGRESS_FRACTION = 0.3746;
     private static final double EBF_PROGRESS_BUCKET_END = 0.3755;
 
-    private static final String RESOURCES = "/gregscope-gametest/";
     private static final String SCRIPT = "gregscope-snapshot.lua";
-    private static final String RUNNER = "autorun.lua";
-    private static final String OUT = "/gregscope-out.txt";
-    private static final String ARGS = "/gregscope-args.txt";
-    private static final String DUMP = "/gregscope-dump.txt";
-    private static final String STATUS = "/gregscope-status.txt";
-    private static final String STATUS_TMP = "/gregscope-status.tmp";
-    private static final String EVENT_LOG = "/event.log"; // OpenOS event.onError log, on the tmpfs (/tmp)
-
-    /** Creative case slots (OC InventorySlots.computer(3)): 3-4 memory, 5 HDD, 7 floppy, 8 CPU, 9 EEPROM. */
-    private static final int SLOT_RAM_A = 3;
-    private static final int SLOT_RAM_B = 4;
-    private static final int SLOT_HDD = 5;
-    private static final int SLOT_FLOPPY = 7;
-    private static final int SLOT_CPU = 8;
-    private static final int SLOT_EEPROM = 9;
-
-    private static final int NETWORK_TIMEOUT_TICKS = 100;
-    /**
-     * Observed boot plus both script passes: 137-153 ticks locally, 157 ticks on GitHub CI. About 2x that, so a hung
-     * computer fails fast. The two OpenOS batches below run one after the other, so a regression that hangs every
-     * computer costs both batch timeouts ({@link #OPENOS_BATCH_TIMEOUT_TICKS} each). The worst case for the whole
-     * gregscope suite (every batch hitting its timeout) is kept in docs/testing.md, the single source for the CI
-     * budget;
-     * it must leave room for server boot (about 30 s on CI) inside CI's 300 s runServer budget, so a hang still yields
-     * a
-     * Horizon-QA report instead of a killed process. Update it there when adding a batch or changing a timeout.
-     */
-    private static final int BOOT_TIMEOUT_TICKS = 300;
-    /** Network join ({@link #NETWORK_TIMEOUT_TICKS}) plus boot ({@link #BOOT_TIMEOUT_TICKS}) plus slack. */
-    static final int OPENOS_BATCH_TIMEOUT_TICKS = 450;
+    /** The callback the runner waits to see on a component before it starts the script. */
+    private static final String AWAIT = "getSnapshot";
 
     private static final String INDENT = "         ";
 
@@ -131,25 +86,36 @@ public class OpenComputersExampleScriptTests {
             GameTestArguments.named("luaj", LuaJLuaArchitecture.class.getName(), "Luaj") };
     }
 
-    @GameTest(batch = "gregscope.oc.openos", timeoutTicks = OPENOS_BATCH_TIMEOUT_TICKS)
+    @GameTest(batch = "gregscope.oc.openos", timeoutTicks = OpenOsComputer.BATCH_TIMEOUT_TICKS)
     @MethodSource
     public static void exampleScriptRunsOnOpenOs(GameTestHelper helper, String architectureClass,
         String expectedVersion) {
-        Class<? extends Architecture> architecture = architectureClass(helper, architectureClass);
-        assumeArchitectureLoadable(helper, architecture);
+        Class<? extends Architecture> architecture = OpenOsComputer.architectureClass(helper, architectureClass);
+        OpenOsComputer.assumeArchitectureLoadable(helper, architecture);
         String label = "oc#5[" + architecture.getSimpleName() + "]";
 
         // GT machine first, so the Adapter wraps it as soon as it joins the network.
         GtPlacement.placeMachine(helper, MACHINE, ItemList.Machine_LV_Macerator.get(1));
-        runExample(helper, label, ADAPTER, CASE, architecture, expectedVersion, () -> {}, run -> {
-            Map<String, Object> probe = Snapshots.probe(helper, MACHINE, label + " probe for the OpenOS machine");
-            List<String> expected = expectedSummary(run.machineAddress, probe);
-            helper.assertEquals(String.join("\n", expected) + "\n", run.output, "example script summary output");
+        OpenOsComputer.run(
+            helper,
+            label,
+            ADAPTER,
+            CASE,
+            architecture,
+            expectedVersion,
+            SCRIPT,
+            AWAIT,
+            run -> run.componentAddress.substring(0, 8),
+            () -> {},
+            run -> {
+                Map<String, Object> probe = Snapshots.probe(helper, MACHINE, label + " probe for the OpenOS machine");
+                List<String> expected = expectedSummary(run.componentAddress, probe);
+                helper.assertEquals(String.join("\n", expected) + "\n", run.output, "example script summary output");
 
-            expected.add("Full snapshot of " + run.machineAddress + ":");
-            expected.addAll(expectedDump(probe));
-            helper.assertEquals(String.join("\n", expected) + "\n", run.dump, "example script dump output");
-        });
+                expected.add("Full snapshot of " + run.componentAddress + ":");
+                expected.addAll(expectedDump(probe));
+                helper.assertEquals(String.join("\n", expected) + "\n", run.dump, "example script dump output");
+            });
     }
 
     /**
@@ -169,12 +135,12 @@ public class OpenComputersExampleScriptTests {
         template = ElectricBlastFurnaceSnapshotTests.TEMPLATE,
         rotation = EBF_ROTATION,
         batch = "gregscope.oc.openos.ebf",
-        timeoutTicks = OPENOS_BATCH_TIMEOUT_TICKS)
+        timeoutTicks = OpenOsComputer.BATCH_TIMEOUT_TICKS)
     public static void exampleScriptShowsRunningEbfWithWarnings(GameTestHelper helper) {
         String label = "oc#7 running EBF";
         // The expected output relies on Lua 5.3 (integer formatting, _VERSION), so skip like the lua53 matrix case
         // where OpenComputers cannot load the native library, instead of failing with a LuaJ version mismatch.
-        assumeArchitectureLoadable(helper, NativeLua53Architecture.class);
+        OpenOsComputer.assumeArchitectureLoadable(helper, NativeLua53Architecture.class);
         Multiblock ebf = helper.gtnh()
             .withWarpRange(EBF_WARP_RANGE)
             .multiblock(EBF_CONTROLLER);
@@ -239,13 +205,16 @@ public class OpenComputersExampleScriptTests {
         long maxStableProgressTicks = (long) Math.ceil(EBF_PROGRESS_BUCKET_END * controller.mMaxProgresstime) - 1;
 
         Probes probes = new Probes();
-        runExample(
+        OpenOsComputer.run(
             helper,
             label,
             EBF_ADAPTER,
             EBF_CASE,
             NativeLua53Architecture.class,
             "Lua 5.3",
+            SCRIPT,
+            AWAIT,
+            run -> run.componentAddress.substring(0, 8),
             () -> probes.pre = Snapshots.probe(helper, EBF_CONTROLLER, label + " probe before computer start"),
             run -> {
                 Map<String, Object> pre = probes.pre;
@@ -253,9 +222,9 @@ public class OpenComputersExampleScriptTests {
                 helper.assertTrue(
                     Snapshots.number(helper, post, "progressTicks") <= maxStableProgressTicks,
                     "scenario ran too long: progress left the printed 0.375 bucket in " + post);
-                List<String> expected = expectedSummary(run.machineAddress, post);
+                List<String> expected = expectedSummary(run.componentAddress, post);
                 helper.assertEquals(
-                    expectedSummary(run.machineAddress, pre),
+                    expectedSummary(run.componentAddress, pre),
                     expected,
                     "scenario not stable: summary lines differ between the probes before and after the script");
 
@@ -275,7 +244,7 @@ public class OpenComputersExampleScriptTests {
 
                 helper.assertEquals(String.join("\n", expected) + "\n", run.output, "example script summary output");
 
-                String dumpHeader = String.join("\n", expected) + "\nFull snapshot of " + run.machineAddress + ":\n";
+                String dumpHeader = String.join("\n", expected) + "\nFull snapshot of " + run.componentAddress + ":\n";
                 helper.assertTrue(
                     run.dump.startsWith(dumpHeader),
                     "example script dump header: expected\n" + dumpHeader + "but got\n" + run.dump);
@@ -351,191 +320,6 @@ public class OpenComputersExampleScriptTests {
             return;
         }
         helper.assertTrue(value >= min && value <= max, "dump line '" + line + "' not in [" + min + ", " + max + "]");
-    }
-
-    /**
-     * Builds an OpenOS computer (creative case, Adapter at {@code adapterPos} next to the machine), runs the example
-     * script twice through the runner and hands the captured output to {@code verifier}.
-     *
-     * @param architecture CPU architecture selected through the CPU item's NBT, or null for the CPU's default
-     * @param beforeStart  runs in the same tick as {@code machine.start()}, just before it
-     */
-    private static void runExample(GameTestHelper helper, String label, TestPos adapterPos, TestPos casePos,
-        Class<? extends Architecture> architecture, String expectedVersion, Runnable beforeStart, Verifier verifier) {
-        byte[] script = resource(helper, SCRIPT);
-        byte[] runner = resource(helper, RUNNER);
-
-        TileEntity adapter = placeOcBlock(helper, adapterPos, "adapter");
-        TileEntity caseTile = placeOcBlock(helper, casePos, "caseCreative");
-        Case computerCase = helper.assertInstanceOf(Case.class, caseTile, "creative case tile is not an OC Case");
-        insert(helper, computerCase, SLOT_RAM_A, "ram6");
-        insert(helper, computerCase, SLOT_RAM_B, "ram6");
-        insert(helper, computerCase, SLOT_HDD, "hdd3");
-        insert(helper, computerCase, SLOT_FLOPPY, "openos");
-        ItemStack cpu = Items.get("cpu3")
-            .createItemStack(1);
-        if (architecture != null) {
-            MutableProcessor processor = helper.assertInstanceOf(
-                MutableProcessor.class,
-                li.cil.oc.api.Driver.driverFor(cpu),
-                "cpu3 driver cannot switch architectures");
-            processor.setArchitecture(cpu, architecture);
-        }
-        computerCase.setInventorySlotContents(SLOT_CPU, cpu);
-        insert(helper, computerCase, SLOT_EEPROM, "luaBios");
-        // Join now (as OC's /oc_spawnComputer does) instead of waiting for OC's next-tick scheduler.
-        Network.joinOrCreateNetwork(adapter);
-        Network.joinOrCreateNetwork(caseTile);
-
-        Machine machine = computerCase.machine();
-        helper.assertNotNull(machine, "creative case has no machine");
-        Run run = new Run();
-        helper.afterTest(() -> {
-            // Stop the computer and empty the case so clearing the cell neither races the worker nor drops items.
-            machine.stop();
-            if (run.hdd != null) {
-                // Leave the HDD empty: OC deletes an empty managed disk's save directory when the item is saved,
-                // otherwise every local run leaves an orphaned directory under world/opencomputers.
-                for (String path : new String[] { "/" + SCRIPT, "/" + RUNNER, ARGS, OUT, DUMP, STATUS, STATUS_TMP }) {
-                    try {
-                        run.hdd.remove(path);
-                    } catch (RuntimeException e) {
-                        System.out
-                            .println("[GregScope gametest] " + label + " cleanup could not remove " + path + ": " + e);
-                    }
-                }
-            }
-            for (int slot = 0; slot < computerCase.getSizeInventory(); slot++) {
-                computerCase.setInventorySlotContents(slot, null);
-            }
-        });
-
-        helper.startSequence()
-            .thenWaitUntil("computer networked, powered, HDD and Adapter reachable", NETWORK_TIMEOUT_TICKS, () -> {
-                Node node = machine.node();
-                helper.assertTrue(node != null && node.network() != null, "machine node not in a network yet");
-                double buffer = ((Connector) node).globalBuffer();
-                helper.assertTrue(buffer > 0, "creative case has not filled the energy buffer yet: " + buffer);
-                run.hdd = null;
-                List<String> machines = new ArrayList<>();
-                for (Node reachable : node.reachableNodes()) {
-                    // Only components the computer can see: an Adapter's merged component hides the per-driver
-                    // nodes behind it (Neighbors visibility), though they are still reachable on the network.
-                    if (!(reachable instanceof Component) || !((Component) reachable).canBeSeenFrom(node)) {
-                        continue;
-                    }
-                    Component component = (Component) reachable;
-                    if ("filesystem".equals(component.name()) && !component.address()
-                        .equals(machine.tmpAddress())) {
-                        OcFileSystem fs = new OcFileSystem(component, node);
-                        if (!fs.isReadOnly()) {
-                            run.hdd = fs;
-                        }
-                    } else if (component.methods()
-                        .contains("getSnapshot")) {
-                            machines.add(component.name() + "@" + component.address());
-                            run.machineAddress = component.address();
-                        }
-                }
-                helper.assertNotNull(run.hdd, "writable HDD filesystem not visible to the computer");
-                helper.assertEquals(
-                    1L,
-                    machines.size(),
-                    "components with getSnapshot visible to the computer: " + machines);
-            })
-            .thenExecute(() -> {
-                helper.assertFalse(run.hdd.exists("/init.lua"), "HDD must not carry init.lua (BIOS would boot it)");
-                run.hdd.write("/" + SCRIPT, script);
-                run.hdd.write("/" + RUNNER, runner);
-                // Second run: `gregscope-snapshot <address prefix>` also dumps the full snapshot.
-                run.hdd.write(
-                    ARGS,
-                    run.machineAddress.substring(0, 8)
-                        .getBytes(StandardCharsets.UTF_8));
-                helper.assertEquals(
-                    new String(script, StandardCharsets.UTF_8),
-                    run.hdd.readText("/" + SCRIPT),
-                    "example script read back from the HDD differs");
-                helper.assertFalse(run.hdd.exists(STATUS), "stale status marker on a fresh HDD");
-
-                beforeStart.run();
-                run.startTick = helper.getWorld()
-                    .getTotalWorldTime();
-                run.startNanos = System.nanoTime();
-                boolean started = machine.start();
-                helper.assertTrue(
-                    started,
-                    "machine.start() refused: lastError=" + machine.lastError()
-                        + ", architecture="
-                        + architecture(machine));
-            })
-            .thenWaitUntil("OpenOS booted and the runner published its status", BOOT_TIMEOUT_TICKS, () -> {
-                if (run.hdd.exists(STATUS)) {
-                    return;
-                }
-                if (!machine.isRunning()) {
-                    // Not retryable: fail now with the crash reason instead of waiting for the timeout.
-                    throw new IllegalStateException(
-                        "computer stopped before the runner finished: lastError=" + machine.lastError()
-                            + ", architecture="
-                            + architecture(machine));
-                }
-                OcFileSystem tmp = tmpFileSystem(machine);
-                if (tmp != null && tmp.exists(EVENT_LOG)) {
-                    throw new IllegalStateException(
-                        "OpenOS logged an uncaught error in /tmp/event.log:\n" + tmp.readText(EVENT_LOG));
-                }
-                helper.fail(
-                    "status marker not yet written; uptime=" + String.format(Locale.ROOT, "%.1f", machine.upTime())
-                        + "s");
-            })
-            .thenExecute(() -> {
-                long ticks = helper.getWorld()
-                    .getTotalWorldTime() - run.startTick;
-                long millis = (System.nanoTime() - run.startNanos) / 1_000_000L;
-                String status = run.hdd.readText(STATUS);
-                run.output = run.hdd.readText(OUT);
-                run.dump = run.hdd.exists(DUMP) ? run.hdd.readText(DUMP) : "<missing>";
-                Snapshots.log(
-                    label + " OpenOS example script finished after "
-                        + ticks
-                        + " ticks / "
-                        + millis
-                        + " ms (machine uptime "
-                        + String.format(Locale.ROOT, "%.2f", machine.upTime())
-                        + " s, architecture "
-                        + architecture(machine)
-                        + "); status",
-                    status.trim()
-                        .replace("\n", " | "));
-                System.out
-                    .println("[GregScope gametest] " + label + " captured `gregscope-snapshot` output:\n" + run.output);
-                System.out.println(
-                    "[GregScope gametest] " + label
-                        + " captured `gregscope-snapshot "
-                        + run.machineAddress.substring(0, 8)
-                        + "` output:\n"
-                        + run.dump);
-
-                helper.assertTrue(status.startsWith("ok\n"), "example script did not finish cleanly: " + status);
-                OcFileSystem tmp = tmpFileSystem(machine);
-                if (tmp != null && tmp.exists(EVENT_LOG)) {
-                    helper.fail("OpenOS logged an error in /tmp/event.log:\n" + tmp.readText(EVENT_LOG));
-                }
-                // Status marker: "ok", detail, _VERSION as OpenOS' sandbox reports it.
-                String[] statusLines = status.split("\n", -1);
-                helper.assertTrue(statusLines.length >= 3, "status marker lacks the _VERSION line: " + status);
-                helper.assertEquals(expectedVersion, statusLines[2], "_VERSION reported by the computer");
-                if (architecture != null) {
-                    helper.assertEquals(
-                        architecture.getName(),
-                        architecture(machine),
-                        "architecture the computer actually ran");
-                }
-
-                verifier.verify(run);
-            })
-            .thenSucceed();
     }
 
     /** The summary lines gregscope-snapshot.lua prints for one machine, formatted as its fmt() does. */
@@ -627,100 +411,6 @@ public class OpenComputersExampleScriptTests {
             return String.format(Locale.ROOT, "%.3f", d);
         }
         return String.valueOf(value);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Class<? extends Architecture> architectureClass(GameTestHelper helper, String name) {
-        try {
-            Class<?> type = Class.forName(name);
-            helper.assertTrue(Architecture.class.isAssignableFrom(type), name + " is not an OC architecture");
-            return (Class<? extends Architecture>) type;
-        } catch (ClassNotFoundException e) {
-            helper.fail("OpenComputers architecture class missing: " + name);
-            return null;
-        }
-    }
-
-    /** Native architectures need OC's bundled JNLua library for this OS/CPU; LuaJ is pure Java. */
-    private static void assumeArchitectureLoadable(GameTestHelper helper, Class<? extends Architecture> architecture) {
-        helper.assumeTrue(
-            architectureLoadable(architecture),
-            "OpenComputers has no native library for " + architecture
-                .getSimpleName() + " on " + System.getProperty("os.name") + "/" + System.getProperty("os.arch"));
-    }
-
-    private static boolean architectureLoadable(Class<? extends Architecture> architecture) {
-        if (architecture == NativeLua52Architecture.class) {
-            return LuaStateFactory.Lua52$.MODULE$.isAvailable();
-        }
-        if (architecture == NativeLua53Architecture.class) {
-            return LuaStateFactory.Lua53$.MODULE$.isAvailable();
-        }
-        if (architecture == NativeLua54Architecture.class) {
-            return LuaStateFactory.Lua54$.MODULE$.isAvailable();
-        }
-        return architecture == LuaJLuaArchitecture.class;
-    }
-
-    private static TileEntity placeOcBlock(GameTestHelper helper, TestPos local, String name) {
-        return OcComponents.placeBlock(helper, local, name);
-    }
-
-    private static void insert(GameTestHelper helper, IInventory inventory, int slot, String name) {
-        ItemInfo info = Items.get(name);
-        helper.assertNotNull(info, "OpenComputers item not registered: " + name);
-        helper.assertNotNull(info.createItemStack(1), "OpenComputers item has no stack: " + name);
-        inventory.setInventorySlotContents(slot, info.createItemStack(1));
-    }
-
-    private static OcFileSystem tmpFileSystem(Machine machine) {
-        Node node = machine.node();
-        if (node == null || node.network() == null || machine.tmpAddress() == null) {
-            return null;
-        }
-        Node tmp = node.network()
-            .node(machine.tmpAddress());
-        return tmp instanceof Component ? new OcFileSystem((Component) tmp, node) : null;
-    }
-
-    private static String architecture(Machine machine) {
-        return machine.architecture() == null ? "none"
-            : machine.architecture()
-                .getClass()
-                .getName();
-    }
-
-    private static byte[] resource(GameTestHelper helper, String name) {
-        try (InputStream in = OpenComputersExampleScriptTests.class.getResourceAsStream(RESOURCES + name)) {
-            helper.assertNotNull(in, "game test resource missing: " + RESOURCES + name);
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = in.read(buffer)) >= 0) {
-                bytes.write(buffer, 0, read);
-            }
-            return bytes.toByteArray();
-        } catch (IOException e) {
-            helper.fail("could not read game test resource " + name + ": " + e);
-            return null;
-        }
-    }
-
-    /** Checks the captured output once the runner finished; runs on the server thread in the final sequence step. */
-    private interface Verifier {
-
-        void verify(Run run);
-    }
-
-    /** Mutable state shared between sequence steps. */
-    private static final class Run {
-
-        OcFileSystem hdd;
-        String machineAddress;
-        long startTick;
-        long startNanos;
-        String output;
-        String dump;
     }
 
     private static final class Probes {

@@ -25,6 +25,7 @@ import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 
 import io.github.ldogg123.gregscope.history.GapReason;
+import io.github.ldogg123.gregscope.hub.HubCodecs;
 import io.github.ldogg123.gregscope.model.MachineState;
 
 /**
@@ -104,6 +105,11 @@ class AssetsExistTest {
         }
         for (GapReason reason : GapReason.values()) {
             keys.add(GregScopeAssets.gapKey(reason.id()));
+        }
+        // GS-114: the Hub GUI names a lifecycle state by its section 10.1 availability id, so every pinned code needs
+        // a key. AVAILABILITY_NONE is a padding row, which the GUI draws as an empty line and never translates.
+        for (int code = HubCodecs.AVAILABILITY_LIVE; code <= HubCodecs.AVAILABILITY_REMOVED; code++) {
+            keys.add(GregScopeAssets.hubAvailabilityKey(HubCodecs.availabilityId(code)));
         }
         List<String> missing = new ArrayList<>();
         for (String key : keys) {

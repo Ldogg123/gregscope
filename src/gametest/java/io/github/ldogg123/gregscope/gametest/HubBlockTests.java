@@ -41,9 +41,12 @@ import io.github.ldogg123.gregscope.hub.TileTelemetryHub;
  * here ({@link CommandSenders.Real} against {@code helper.spawnFakePlayer}).
  *
  * <p>
- * <b>No GUI yet.</b> GS-114 owns {@code HubPanel}, so a permitted right-click opens nothing. The server-side checks
- * are real and are what these tests assert: the refusal messages, and that a refused viewer never reaches the open
- * path (the view register stays empty, and the player's container is still their own inventory).
+ * <b>The open path.</b> GS-114 made a permitted right-click call {@code GuiFactories.tileEntity().open}. These tests
+ * stay about the <b>refusals</b>: a refused viewer never reaches the open path (the view register stays empty and
+ * their container is still their own inventory). The permitted clicks here are made by a {@code FakePlayer} twin of
+ * the allowed viewer, because erratum E9 says {@code GuiManager.open} returns immediately for a {@code FakePlayer} -
+ * which is also the assertion that the section 9.1 view register is not touched by a GUI that never opened. The real
+ * panel, its handlers and the {@code opened}/{@code closed} pair are {@code HubGuiServerTests}.
  *
  * <p>
  * <b>Batch names.</b> {@code gregscope.surface.hub*} sorts after every existing GregScope batch, so no older test's
@@ -252,13 +255,21 @@ public class HubBlockTests {
                 .size(),
             "a denied activation reserved a view");
 
-        // The owner is allowed: no refusal, and still nothing open (GS-114 brings the panel).
-        helper.assertTrue(activate(helper, HUB, owner), "onBlockActivated did not consume the owner's click");
-        helper.assertEquals(0, owner.chat.size(), "the owner was told something: " + owner.chat);
+        // The owner is allowed: no refusal. The click is made by the owner's FakePlayer twin, so GuiManager.open
+        // returns immediately (erratum E9) and the open path is reached but opens nothing - which is exactly how the
+        // section 9.1 register must behave for a GUI that never appeared.
+        CommandSenders.Player ownerTwin = CommandSenders.player(helper, "hubOwner2", OWNER_UUID, -1);
+        helper.assertTrue(activate(helper, HUB, ownerTwin), "onBlockActivated did not consume the owner's click");
+        helper.assertEquals(0, ownerTwin.chat.size(), "the owner was told something: " + ownerTwin.chat);
         helper.assertSame(
-            owner.inventoryContainer,
-            owner.openContainer,
-            "GS-112 opened a container; is this still the no-GUI state?");
+            ownerTwin.inventoryContainer,
+            ownerTwin.openContainer,
+            "a FakePlayer's open reached a container; erratum E9 says GuiManager.open returns first");
+        helper.assertEquals(
+            0,
+            TelemetryHubs.views()
+                .size(),
+            "a GUI that never opened reserved a view");
         helper.succeed();
     }
 
@@ -268,7 +279,8 @@ public class HubBlockTests {
         clearViews(helper);
         placeHub(helper, HUB, helper.spawnFakePlayer("gregscope-hub-robot2"));
         CommandSenders.Real stranger = CommandSenders.realPlayer(helper, "hubNobody", -1);
-        CommandSenders.Real op = CommandSenders.realPlayer(helper, "hubOp", 2);
+        // The operator's click is permitted, so it reaches the open path: a FakePlayer (erratum E9) keeps it a no-op.
+        CommandSenders.Player op = CommandSenders.player(helper, "hubOp", 2);
 
         activate(helper, HUB, stranger);
         helper.assertTrue(stranger.chat.has(GregScopeAssets.LANG_HUB_DENIED), "" + stranger.chat);
@@ -305,12 +317,12 @@ public class HubBlockTests {
                 .size(),
             "the refused click changed the view register");
 
-        // With the view closed again the same click is allowed.
-        owner.chat.clear();
+        // With the view closed again the same click is allowed (made by the owner's FakePlayer twin, erratum E9).
+        CommandSenders.Player ownerTwin = CommandSenders.player(helper, "hubOwner3", OWNER_UUID, -1);
         TelemetryHubs.views()
             .clear();
-        activate(helper, HUB, owner);
-        helper.assertEquals(0, owner.chat.size(), "the owner was still refused: " + owner.chat);
+        activate(helper, HUB, ownerTwin);
+        helper.assertEquals(0, ownerTwin.chat.size(), "the owner was still refused: " + ownerTwin.chat);
         helper.succeed();
     }
 

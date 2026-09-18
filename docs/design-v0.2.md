@@ -2248,8 +2248,10 @@ as a number, so the two batches that write `timeoutTicks = OPENOS_BATCH_TIMEOUT_
 `timeout 300 ./gradlew runServer` that also covers Gradle configuration and Forge/GTNH boot (about 30 s locally), so
 the "59 s of headroom" recorded after GS-112 does not exist. The script now resolves `static final int` constants;
 `docs/testing.md` carries the corrected figure and the correction itself. No test timeout and no workflow input was
-changed here, because the 300 s step is a fixed constraint for this work; the choice between raising it and lowering
-`OPENOS_BATCH_TIMEOUT_TICKS` (450 against an observed 149) is left as an open issue.
+changed here. (**Superseded by the GS-114/115/116 review follow-up:** the workflow's step was raised to 600 s in
+commit `774c55e`, before this milestone started, so the headroom problem this note opened - and that GS-114, GS-115
+and GS-116 each carried forward while stating that the workflow "still reads 300 s" - does not exist. See the
+follow-up section at the end of this file.)
 
 **Tests.** Unit 493 -> 500: three new `HistoryIoTest` cases (a failed load answers and is not `absent`; failed
 writes reach `drainWriteFailures()` while a failed delete needs no answer; `terminate()` gets rid of a parked
@@ -2348,3 +2350,416 @@ the 5-minute and 24-hour summaries, the hourly strip, the DTO codecs and the reb
   failed exactly `thePageIsClampedAgainWhenTheListShrinksUnderIt` (`expected: <0> but was: <2>`), and removing
   `HubCodecs.readString`'s length check failed exactly the two oversize-string cases. Both were reverted and
   verified with `cmp`.
+
+### GS-114 (2026-09-17)
+
+**Scope.** Sections 9.2 and 9.3: the MUI2 panel, the seven named sync handlers, the server-side validation of the
+four C2S values, `canInteractWith`, the client-only `createScreen`, and the two carry-overs GS-113 left
+(`HubViewModel.setSensorsAbandoned` wiring and `TelemetryHubs.views().opened/closed` around the real panel). Manual
+client rendering stays with GS-121.
+
+- **Three classes section 2 does not name individually.** Section 2 lists `hub/ ... HubPanel`. What shipped is
+  `hub/HubPanel` (the widget tree and the seven `syncValue` registrations), `hub/HubSession` (the per-viewer object
+  section 9.3 already names - "getters return fields of a per-viewer `HubSession`") and `hub/HubPacketIo` (the
+  `PacketBuffer` implementation of the section 2 `ByteSink`/`ByteSource` seam, plus the six serializer pairs). The
+  split is what makes "`HubPanel` does not depend on the host" true: the panel sees a `HubSession` and nothing else,
+  and `HubPacketIo` is the single class that ties the wire format to a game type, exactly as `NbtKeyValue` is for
+  the sensor cover's `KeyValue` seam.
+- **One session class, two sides.** `buildUI` runs on the server and on the client, and the client has no registry,
+  so `HubSession` takes a `client` flag: on the server it owns the `HubViewModel` and every getter answers from a
+  throttled rebuild; on the client the model is null, `refresh()` does nothing, and the sync handlers' setters fill
+  the same fields. That is why the panel can be built from one code path and why the getters are safe on either side.
+- **Validation happens in the setters, which are the C2S entry points.** `IntSyncValue.read` and
+  `StringSyncValue.read` call the setter with whatever arrived, so `HubSession.setPage/setFilter/setSelectedRow/
+  setLabel` are the server's only gate. Each one refreshes first (so it clamps against the current page count and
+  resolves a row index against the current page) and then clamps or refuses. A refused value is simply not stored:
+  the handler's cache still holds the rejected text, the getter still returns the accepted one, and ModularUI2's
+  next `detectAndSendChanges` pushes the accepted one back - which is what section 9.3's "on rejection the value
+  resets" means in this API. The gametest reads the label through `updateCacheFromSource` for exactly that reason,
+  and that is how the first run found the mistake of reading the raw cache instead.
+- **`gs_label` refuses before it writes, and `SensorRegistry.writeLabel` owns the rest.** The session checks
+  `Labels.acceptsInput` (at most 64 UTF-16 units before sanitizing), that something is selected, and
+  `HubDetail.canEdit` (which is `canRename` **and** LIVE, per GS-113's note); `writeLabel` then does
+  `Labels.sanitize`, the section 6.2 live-cover lookup, the "LIVE only" rule and the rename cooldown, and writes the
+  cover NBT - the same call `/gregscope label` makes. Nothing else in the GUI writes anything.
+- **`canInteractWith` copies the MUI2 default rather than delegating to it.** Section 9.3 cites
+  `TileEntityGuiFactory.java:56-58`; `settings.canInteractWith` replaces the default outright, so the tile entity
+  repeats the same three conditions (same player, the tile still there, squared distance at most 64) and adds the
+  section 5 access re-check. Copying also lets it assert `data.getTileEntity() == this`, so a Hub broken and
+  replaced under a viewer closes the GUI. The re-check counts interaction checks, which Minecraft makes once per
+  player tick, and re-asks every 100 of them; between them the cached answer is used, so a team lookup never runs
+  per tick.
+- **The view register hangs off ModularUI2's panel lifecycle, not off the right-click.** `buildUI` registers
+  `syncManager.addOpenListener`/`addCloseListener` (server side only) around `TelemetryHubs.views()`. This is what
+  closes the GS-113 carry-over, and it is stricter than calling `opened` from `onBlockActivated` would be: erratum
+  E9's FakePlayer, whose `GuiManager.open` returns before any panel exists, reserves nothing, and neither does a
+  click the section 5 or the cap check refused. `BlockTelemetryHub` therefore still only *asks* `canOpen`.
+  Known limit: if a client never sends `CloseGuiPacket` and never disconnects, a slot stays held for that viewer
+  until the server stops (`TelemetryHubs.reset()`); because the cap counts viewers and `HubViews.canOpen` always
+  lets a viewer who already holds a view back in, such a leak can only cost that one viewer's own slot.
+- **`sensorsAbandoned` is fed per rebuild.** `HubSession.refresh` calls `setSensorsAbandoned` from
+  `HistoryPersistence.sensorsAbandoned()` before every rebuild, which is the other GS-113 carry-over. The
+  `/gregscope stats` half is still open and belongs to GS-111's surface, not here.
+- **The client lift is exactly one class, and `ShippedClassesTest` says so.** `createScreen` is
+  `@SideOnly(Side.CLIENT)` on `TileTelemetryHub` (section 1.4). `noClientClassReferences` now skips the
+  `@SideOnly(CLIENT)` rule for that one class, and the new `theOnlyClientOnlyClassIsTheHubTileEntity` requires that
+  it really carries the annotation, that it declares `createScreen`, that it names `ModularScreen`, and that no
+  other shipped class uses `@SideOnly` at all. The denylist on `net/minecraft/client/` and `cpw/mods/fml/client/`
+  still covers this class too. That the annotation sits on `createScreen` **alone** is checked on the running
+  server: `HubGuiServerTests.buildUiOnDedicatedServer` asks `TileTelemetryHub.class.getDeclaredMethods()` what FML's
+  `SideTransformer` left, and there is no `createScreen`.
+- **No synced actions, asserted statically.** Section 9.3 forbids `registerSyncedAction`. The new
+  `ShippedClassesTest.noShippedClassRegistersASyncedAction` fails if any shipped class names
+  `registerSyncedAction`, `registerClientSyncedAction`, `registerServerSyncedAction` or `callSyncedAction`; the
+  gametest additionally pins the seven handler names and their C2S rights (the four inputs accept a client packet,
+  the three outputs do not).
+- **Deviation: the Hub block's front and top icons are still not wired.** GS-112's note expected GS-114 to add them
+  "since it already needs `@SideOnly(CLIENT)`". It did not: per-side icons need
+  `registerBlockIcons(IIconRegister)` / `getIcon(int, int)`, so `BlockTelemetryHub` would have to name
+  `net.minecraft.client.renderer.texture.IIconRegister` - a lift of the *client package denylist*, which is a much
+  wider guard than the `@SideOnly` one this ticket needed, and one no GUI acceptance criterion asks for. All three
+  PNGs are committed and every side still draws `telemetry_hub_side`. The icons are client rendering, so they go
+  with GS-121's manual checklist and v0.2.1's GT hull icons.
+- **`HubViewModel` gained one method.** `emptyPage()` exposes the shared unmodifiable page of eight
+  `HubRow.EMPTY` rows, so the client-side session starts from the same object the model does. Still `[pure]`.
+- **design-v0.3 GS-201 hooks, where they were free.** The detail line prints `SensorKind.label(kind)`, so a v0.3
+  flow sensor names itself without a wire or layout change; `HubViewModel.clampFilter` already maps the v0.3 filter
+  values, so the filter button cycles only the two v0.2 values and a v0.3 value off the wire still lands on All. No
+  flow column and no flow-aware row was built: `HubRow` has nothing to put in one in v0.2.
+- **Tests.** Unit 566 to 568 in 38 classes (the two new `ShippedClassesTest` cases); in game 127 to 138, all in the
+  new `HubGuiServerTests` (batch `gregscope.surface.hubgui`, `timeoutTicks = 20` because every one of them is
+  synchronous and the report confirms 0 observed ticks). Worst-case batch budget 5,520 to **5,540 ticks (277 s)**
+  over 36 batches. `HubBlockTests` changed in one way: the two *permitted* right-clicks are now made by a FakePlayer
+  twin of the allowed viewer, because a permitted click really opens a GUI now and Horizon-QA has no player with a
+  network connection (erratum E9 makes a FakePlayer's open a no-op, which is also the assertion that a GUI that
+  never appeared reserves no view).
+- **Negative controls (reverted, both re-verified green afterwards).** Dropping `HubDetail.canEdit()` from
+  `HubSession.setLabel` failed exactly `HubGuiServerTests.labelSetterRejectsStranger` ("a stranger wrote the cover
+  label: expected <> but found <stolen>"), 137 passed, status FAILED, exit code 1. Removing
+  `@SideOnly(Side.CLIENT)` from `createScreen` failed exactly
+  `ShippedClassesTest.theOnlyClientOnlyClassIsTheHubTileEntity`.
+
+### GS-115 (2026-09-17)
+
+**Scope.** Section 10.2's two callbacks on the existing merged machine component, plus the section 10.1 and 10.4
+table builders. `getSnapshot`, the component names, their priority and the schema v1 output are untouched; the
+`gregscope_hub` component and the example script are GS-116's.
+
+**One new class, and design section 2 already names it.** `integration/opencomputers/LuaTables` is `[pure]`, as
+section 2's package tree says. It builds plain `java.util` structure - `LinkedHashMap` tables, `ArrayList`
+sequences - and OpenComputers converts both on the way out
+(`oc/li/cil/oc/server/driver/Registry.scala:167-255` for a `Component.invoke` result, `ExtendedLuaState.scala:27-104`
+for the push into the Lua state). Making it pure is what lets `LuaTablesTest` cover every rule of both tables on a
+plain JVM. The `integration` package therefore joins `PureSourcesTest`'s scanned set, and the three v0.1 classes
+beside it (`GregTechMachineDriver`, `GregTechMachineEnvironment`, `OpenComputersIntegration`) are listed as the
+intended OpenComputers adapters, exactly as the `hub` and `history` packages already list theirs.
+
+**Decisions this ticket had to make, because section 10 does not name them.**
+
+1. **Which sensor is "this machine's sensor".** The registry indexes a sensor by block position *and* cover side, so
+   a machine can carry up to six. `sensorEntry()` asks all six sides in `ForgeDirection` order, a LIVE entry wins
+   over an UNLOADED one, and ties go to the lowest side ordinal. It has to be deterministic, or two calls a tick
+   apart could answer about different covers. Tombstones can never appear: `SensorRegistryCore.toTombstone` drops
+   the entry from the position index.
+2. **`state` and `statusId` at a non-LIVE availability.** Section 10.1 says the record uses the v1-reserved
+   `unavailable` / `machine_unavailable` "when there is no current snapshot". Implemented as "when there is no
+   snapshot **at all**": a sensor that has one reports it at any availability, with `ageSeconds` as the qualifier.
+   That is GS-113's rule for `HubDetail` (recorded in its notes), and having the Hub and a computer disagree about
+   the same machine would be worse than either answer on its own.
+3. **`stateSeconds` holds sample counts, not converted seconds.** Section 10.4's example row is `samples=60,
+   expected=60, stateSeconds={running=50, idle=10}`, which is the shipped interval (`1200 / intervalTicks` = 60
+   samples per minute, i.e. one per second) and where the two are the same number. At a coarser interval a
+   conversion would need rounding, and the rounded parts would no longer add up to `samples`. The row carries
+   `samples` and `expected`, so a consumer can scale by `60 / expected` exactly; the docs say so.
+4. **Minute windows are aligned to whole minutes.** `before` is floored to a minute boundary, so `to` is the start
+   of the minute that is still open and `from` is `count` minutes before it. That is what makes section 10.4's "to
+   page back, pass the returned `from`" meet exactly, with no overlap and no hole, and it keeps a reader off the
+   open minute, which the section 7.5 contract asks for anyway. Second windows are `[before - count, before)`
+   unaligned, because a second ring is keyed by second.
+5. **Gap seconds.** Section 10.4 gives `gaps` for minutes only in its example, but the same rule is the only
+   consistent one for seconds: a second the ring recorded as a gap, and a second nobody wrote at all, are left out
+   of `rows` and merged into ranges, the unwritten one through `GapRanges.missingReason` (rule 3). An observed
+   sample beats a gap written in the same wall-clock second, because a second ring places entries in append order
+   and can hold both.
+6. **`before` is clamped, not trusted.** `LuaTables.clampBefore` puts it into `[0, Integer.MAX_VALUE * 60]`, the
+   largest epoch second a section 7.4 `i32` `epochMinute` can index. A Lua number can hold more, and the resulting
+   window could only ever be empty.
+7. **`resolution` is read with `optString`, not `checkString`.** Calling `getSensorHistory()` with no argument is
+   then the soft error `nil, "bad resolution"` rather than a Lua exception, which is the same shape as every other
+   error in section 10.4. Section 10.2 writes the argument as required; this is strictly more forgiving and never
+   returns a table for a resolution it did not understand.
+8. **`nil, "no sensor"` for both callbacks.** Section 14's acceptance criterion names it for `getSensor`;
+   `getSensorHistory` on the machine component has no id argument, so section 10.4's `"sensor not found"` has no
+   meaning here. `LuaTables` pins both strings (and `"ambiguous id"`) for GS-116.
+9. **Side names and availability ids are pinned tables in `LuaTables`.** A `[pure]` class may not name
+   `ForgeDirection`, and `SensorState.label()` spells two ids with a space ("over cap", "in item") because it feeds
+   the cover tooltip. `OcMachineSensorTests.sideNamesMatchForgeDirection` compares the pinned names with the real
+   enum on the running server, so the pin cannot drift.
+10. **No permission check on the machine component.** Section 10.3 scopes the Hub component to section 5; section
+    10.2 says nothing, and a computer that reaches this component is wired to an Adapter touching the machine
+    itself. That is the same physical access v0.1's `getSnapshot` already grants, so adding a check here would only
+    make the two callbacks disagree with the one beside them.
+
+**Erratum E3 verified, not assumed.** OpenComputers keys a merged component's saved address by the *set of
+environment classes* behind the block, not by the callbacks on them, so adding two `@Callback` methods leaves every
+address in place. `OcMachineSensorTests.addressStableAcrossChunkReload` asserts it on a running server through a
+real chunk unload and reload.
+
+**Test batch timeouts.** The two new batches ask for `timeoutTicks = 40` and `60` instead of Horizon-QA's default
+100. Every test is one Adapter join plus a synchronous body (observed 0 to 3 ticks), and the worst-case suite budget
+is already tight; the default would have charged it 200 ticks these tests cannot use.
+
+**Results.** `spotlessApply` + `clean build`: BUILD SUCCESSFUL, 595 unit tests in 39 classes green (568 before; the
+27 new ones are all `LuaTablesTest`). Full `gregscope` Horizon-QA run on a fresh world: 145 passed, 4 skipped, 0
+failed, status PASSED, exit code 0. Jar: 224 entries, none matching the test-artifact pattern. Worst-case batch
+budget 5,640 ticks = 282 s over 38 batches.
+
+**Negative control (reverted, re-verified green afterwards).** `sensorEntry()` narrowed to side 0 only, so it could
+never find the fixtures' cover on `UP`: exactly 2 of 145 failed, `getSensorMatchesCoverUuid` and
+`historyRowsOldestFirst`, both with the real soft error `[null, no sensor]`; status FAILED, exit code 1.
+`noSensorNil`, `badResolutionSoftErrors` and `v01SnapshotOutputIsUnchanged` stayed green, and so did the whole unit
+suite - which is the discrimination that matters, because no unit test can see the six-side lookup.
+
+**Carry-overs, unchanged by this ticket.** The `/gregscope stats` half of `HistoryPersistence.sensorsAbandoned()` is
+still open (GS-111's surface; no command was touched here). GS-114 closed the Hub-column half and the
+`TelemetryHubs.views()` one. `docs/opencomputers.md` gained its v0.2 section for GS-115 only; GS-116 owes the
+`gregscope_hub` component's half of it.
+
+### GS-116 (2026-09-17)
+
+**Scope.** Section 10.3's `gregscope_hub` component (driver plus a final environment whose callbacks are declared on
+it), the section 5 scope enforcement behind it, `docs/examples/gregscope-hub.lua` with the build step that copies it
+into the game test resources, and an OpenOS test that runs that script unmodified. `getSnapshot`, the v0.1 component
+names and priorities, the GS-115 machine callbacks and every Adapter address are untouched.
+
+**Deviation, and the reason for it: none of the four callbacks is `direct`.** Section 10.3 marks `getInfo`,
+`listSensors` and `getLatest` direct (limit 8), and section 6.3 words that as "direct callbacks read the frame only".
+A `TelemetryFrame` is immutable and published through a `static volatile`, so reading one from a computer thread is
+indeed safe - but none of the three can answer from the frame alone:
+
+1. **Scope needs teams.** Every row goes through `AccessPolicy.inHubScope`, which asks `sameTeam`.
+   `GtnhlibTeamResolver` iterates `TeamManager.getTeamMap()`, a plain `java.util.HashMap`
+   (`gtnhlib/.../teams/TeamManager.java:31`), and asks `Team.isMember` of an `ObjectOpenHashSet`
+   (`Team.java:25,57-58`). The server thread mutates both through the team commands, and iterating a `HashMap` while
+   it resizes can spin forever. `GtnhlibTeamResolver`'s own javadoc already says "on the server thread".
+2. **The Hub's owner lives on a `TileEntity`**, which is server-thread state as well.
+
+The one way to keep them direct would be a scope snapshot refreshed from OpenComputers' per-tick `update()` hook -
+periodic work that section 1.4 does not lift and that `ShippedClassesTest` guards by name (`canUpdate` and `update`
+are in its `TICK_MEMBER_NAMES`). Running the three on the server thread instead costs a computer one tick of latency
+per call and nothing else, and it keeps section 6.3's budget table literally true: the Hub component does no periodic
+work at all. `OcHubTests.callbacksAreServerThreadOnly` pins it through OpenComputers' own `Component.annotation`, so
+the deviation cannot drift back silently, and `docs/opencomputers.md` states it for users.
+
+**Two classes section 2 does not name individually.** `integration/opencomputers/HubScope` is `[pure]`: one Hub's
+filtered view of a frame, with the paging and the id resolution. Making it pure is what lets `HubScopeTest` cover
+every clamp and every lookup rule on a plain JVM, and it keeps `HubEnvironment` down to "resolve the tile, build the
+scope, build the table". `integration/opencomputers/HubDriver` is the `DriverSidedTileEntity` beside it. Both are
+listed in `PureSourcesTest` (`HubScope` pure, the other two as the intended OpenComputers adapters) and in
+`ShippedClassesTest`.
+
+**Decisions this ticket had to make, because section 10.3 does not name them.**
+
+1. **A prefix shorter than eight characters is `sensor not found`, not an error of its own.** Section 10.3 writes the
+   argument as `idOrPrefix>=8`; anything shorter is simply not an id this callback accepts, and section 5 asks the
+   component never to reveal what a caller may not see, so it gets the same answer as an id that does not exist.
+   Matching itself reuses `CommandArgs.matchesPrefix`, so `getLatest` and `/gregscope info` resolve a prefix the same
+   way (dashes removed, case-insensitive).
+2. **`getSensorHistory` takes the id first and the resolution second**, and checks the **resolution first**. That is
+   the order section 10.3's table gives the arguments, and checking the resolution first is what the machine
+   component does, so a caller gets `bad resolution` whether or not the id exists.
+3. **A sensor in scope with no rings at all** - a tombstone waiting to be purged - answers `nil, "sensor not found"`.
+   Section 10.4 has no error for "known, but there is nothing to read", and the alternatives (an empty table, or a
+   window of gaps) would both claim history exists.
+4. **`getInfo` also carries `sensorRecordVersion`.** Section 10.3's list names three versions, and the records
+   `listSensors` returns carry a fourth; a computer that wants to check what it is talking to should not have to
+   fetch a record to learn it.
+5. **`intervalTicks` falls back to the configured interval** while no frame has been published
+   (`TelemetryFrame.EMPTY` carries 0), and `frameAgeSeconds` is then 0 rather than an age measured against a
+   publication that never happened. A clock that went backwards also reads 0, never a negative age.
+6. **`secondsCapacity` and `minutesCapacity` come from `SecondRing.CAPACITY` and `MinuteRing.SLOTS`**, not from the
+   numbers written in section 10.3, so the values a computer reads are the ones the server really keeps. A unit test
+   asserts they are still 300 and 1440.
+7. **The scope is cached per frame.** `HubEnvironment` rebuilds it when the published frame object or the Hub's owner
+   changed, which is exactly the staleness section 5 already allows a team lookup ("cached for one sampler-frame
+   sequence"). A computer polling in a loop therefore costs one team scan per sampling interval, not one per call.
+8. **The environment holds the Hub's tile entity** (the shape OpenComputers' own tile entity drivers use,
+   `oc/li/cil/oc/integration/vanilla/DriverNoteBlock.scala:23-24`) and re-reads it from the world when the one it
+   holds went invalid, so a chunk reload that swaps the tile entity object keeps the component working.
+
+**`getLatest` answers from the frame, which can be one sampling interval behind the registry.** That is what section
+10.3 asks for, and it is visible in the tests: a sensor registered mid-interval can be sampled *after* that
+interval's frame was published, so `OcHubTests.latestMatchesFrame` publishes two intervals and compares against
+`frame.sensor(id).lastSnapshot()` rather than the registry entry's. The two are the same object on a settled server;
+they are not guaranteed to be within the same tick as a fresh sample.
+
+**The example script and its test.** `docs/examples/gregscope-hub.lua` prints the Hub summary, the problem list and a
+60-minute table with its gap ranges, using only `component.gregscope_hub` and the callbacks above; `addon.gradle`
+copies the repo file byte for byte into the game test resources beside the v0.1 one. `OpenOsComputer` is the OpenOS
+harness lifted out of `OpenComputersExampleScriptTests` so both scripts run on the same computer; the runner
+`autorun.lua` now takes the script name and the callback to wait for from two optional files and falls back to the
+v0.1 values, so the v0.1 test is unchanged. The new test compares the summary, the problem list and the table
+heading byte for byte with a Java mirror of the script's own `string.format` calls, and checks the table body as the
+section 10.4 invariant (printed rows plus printed gap minutes are exactly the 60 minutes of the window), because a
+minute boundary can pass while the computer boots.
+
+**Results.** `spotlessApply` + `build`: BUILD SUCCESSFUL, **619 unit tests in 40 classes** green (595 in 39 before;
+the 24 new ones are all `HubScopeTest`). Full `gregscope` Horizon-QA run on a fresh world: **156 passed, 4 skipped,
+0 failed**, status `PASSED`, exit code 0. Jar: 230 entries, none matching the test-artifact pattern. Worst-case batch
+budget **6,130 ticks = 306.5 s over 40 batches**.
+
+**Negative control (reverted, re-verified green afterwards).** The section 5 filter was removed from `HubScope.of`
+(`policy.inHubScope(...)` replaced by `if (false)`), so every sensor on the server landed in every Hub's scope:
+exactly **7 of 156** in-game tests failed - `listScopedByHubOwner`, `unownedHubShowsNothing`,
+`unloadedSensorRecordNoSnapshot`, `listLimitAndOffsetClamped`, `outOfScopeIdIsNotFound` and both
+`HubExampleScriptTests` cases - while `componentPresent`, `callbacksAreServerThreadOnly`, `latestMatchesFrame` and
+`minuteHistoryPaging` stayed green, and **7 of 619** unit tests failed, all in `HubScopeTest`.
+
+**Carry-overs.** The `/gregscope stats` half of surfacing `HistoryPersistence.sensorsAbandoned()` is still open
+(GS-111's surface; no command was touched here). `docs/opencomputers.md` now covers the whole v0.2 OpenComputers
+surface, GS-116 included, so that carry-over is closed. ~~The CI-step headroom problem is worse and is reported with
+the run: 6,130 ticks is past a 300 s step on its own, before Gradle configuration and Forge boot.~~ **Corrected by
+the review follow-up:** `.github/workflows/build-and-test.yml` reads `timeout: 600` and has since commit `774c55e`.
+6,130 ticks is 306.5 s, which fits a 600 s step with about 260 s to spare once boot is counted. The claim that the
+workflow "still reads 300 s", repeated in the GS-114, GS-115 and GS-116 notes, was never checked against the file.
+
+### GS-114/115/116 review follow-up (2026-09-18)
+
+Six confirmed review findings applied on top of M4. Nothing new was designed; every change either closes a hole the
+design already required to be closed, or corrects a claim the notes made without checking it.
+
+**1. `buildUI` is now the section 5 gate, not `onBlockActivated` (blocker).** ModularUI2 registers `OpenGuiPacket`
+with `registerBoth(...)` -> `registerC2S(...)` (`network/NetworkHandler.java`), its `executeServer` calls
+`factory.readGuiData(handler.playerEntity, data)` and then `GuiManager.open(...)`, and
+`TileEntityGuiFactory.readGuiData` builds the `PosGuiData` out of **three varints the client chose**. A modified
+client could therefore reach `TileTelemetryHub.buildUI` for any Hub in the world without ever going through
+`BlockTelemetryHub.onBlockActivated`, which held the only copy of the section 5 check and the section 9.1 cap. The
+container did close afterwards - vanilla's per-tick `canInteractWith` - but 1.7.10 runs
+`openContainer.detectAndSendChanges()` **before** that check in `EntityPlayerMP.onUpdate`, so the first sync shipped
+`gs_header` and eight `gs_rows` of another team's scope, and `gs_page`/`gs_select` packets in the same packet drain
+could walk the whole list and pull a full `gs_detail`. The open listener also reserved a slot of the cap
+unconditionally.
+
+`buildUI` now evaluates `canOpen(data.getPlayer())` and `TelemetryHubs.views().canOpen(viewer, maxOpenHubViews)` on
+the server side and, when either refuses, builds a **denied** `HubSession`: no `HubViewModel`, so every getter answers
+`HubHeader.EMPTY` / eight `HubRow.EMPTY` / `HubDetail.NONE`; every setter is a no-op; no open or close listener is
+registered, so nothing is reserved; and `canInteractWith` refuses at once, so the container closes on the first player
+tick with nothing but empty DTOs ever sent. `onBlockActivated` keeps its own copy of the two checks because it is the
+path that tells the player *which* one refused - it is now the message path, and `buildUI` is the authority.
+
+**2. A disconnect releases the view slot (`hub/HubViewLifecycle`).** ModularUI2's panel close listener runs from
+`PanelSyncManager.onClose`, reached only through `ModularSyncManager.dispose()`/`close(name)`, i.e. from the client's
+`CloseGuiPacket`. A player who alt-F4s, times out or crashes with the Hub open never sends one:
+`ServerConfigurationManager.playerLoggedOut` closes no container, and ModularUI2's `CommonProxy.onPlayerLeave` ->
+`ModularNetworkSide.onPlayerLeave` only clears its two network maps. The slot was then held until server stop, and 32
+such disconnects (the default `limits.maxOpenHubViews`) would answer every right-click on every Hub with "busy". The
+GS-114 note had this exactly backwards - it said the leak needed a client that "neither sends `CloseGuiPacket` nor
+disconnects", when the disconnect is precisely the case that leaks; the ordinary force-closes do release, because the
+client reacts to `S2EPacketCloseWindow` by sending one.
+
+`PlayerEvent.PlayerLoggedOutEvent` is posted on the **FML** bus, which section 1.4 allows only the sampler, so this is
+a third deliberate, documented lift: one new shipped class, `hub/HubViewLifecycle`, may name `FMLCommonHandler`, the
+bus and `SubscribeEvent`, and nothing else on the periodic-work list - `TickEvent` in particular stays forbidden for
+it. `ShippedClassesTest.theOnlyLogoutHandlerIsTheHubViewRelease` keeps the lift narrow and non-vacuous and checks that
+no other shipped class names the logout event; `IdleCostTests.exactlyOneLogoutHandler` checks there is exactly one
+`@SubscribeEvent` method and that it takes that event; `IdleCostTests.noGregScopeListeners...` now expects **two**
+GregScope listeners on the FML bus and still one on the Forge bus and zero on the two generation buses.
+
+The alternative that was tried first and rejected: pruning viewers who are not in
+`MinecraftServer.getConfigurationManager().playerEntityList` at the two places that read the cap. It needs no lift,
+but a Horizon-QA server has **no** logged-in players, so the prune would empty the register on every check and
+`HubBlockTests.viewCapEnforced` could no longer be written at all. A fix that cannot be tested in-game is the wrong
+fix here.
+
+A second, smaller release was added while in the area: `canInteractWith` releases the slot when it returns false.
+Minecraft answers a failed check with `EntityPlayerMP.closeScreen` -> `closeContainer`, which reaches only MUI2's
+empty `ModularContainer.onModularContainerClosed`, so the close listener does not fire on that path either.
+
+**3. No C2S packet rebuilds the view model (section 6.3's own budget).** `HubSession.setPage`/`setFilter`/
+`setSelectedRow` each called `refresh()` and then a model setter that sets `dirty`, so packet N's dirty flag was
+consumed by packet N+1's refresh: one packet, one full rebuild. A rebuild scans and sorts the whole scope and, with a
+row selected, does about 2,885 `MinuteSource.slot` lookups plus 26 `Summaries` allocations - and 1.7.10 drains up to
+1,000 queued packets per connection per tick on the server thread (`NetworkManager.processReceivedPackets`), so an
+alternating `gs_select` stream was a single-player tick-time denial of service. Section 6.3 had budgeted "<=1 per
+interval, or on an input change throttled to 1 per 4 ticks"; no throttle existed and no note recorded the deviation.
+
+None of the four C2S setters calls `refresh()` any more. Each only clamps its value and marks the model dirty; the
+rebuild happens in the getters, which ModularUI2 drives from `detectAndSendChanges`, so a burst of N packets costs
+**zero** rebuilds and the next container update costs one. `gs_label` needed one more change to get there: it used to
+read `detail.canEdit()`, which is a rebuilt value, so it is now asked of `AccessPolicy.canRename` directly against the
+selected sensor's current owner. That is strictly more correct (not one interval stale) and `SensorRegistry.writeLabel`
+still owns the LIVE check, the live cover lookup and the rename cooldown, which is the other half of `canEdit`.
+`canEdit` stays what it always was: the client's hint for greying the text field out.
+
+**Deviation from section 6.3, recorded deliberately.** The implemented throttle is "never on packet arrival, at most
+once per container update", not "1 per 4 ticks". A 4-tick suppression would need a tick source the panel does not
+otherwise have and would leave the C2S echo (which is answered from the model immediately) and the S2C DTOs
+disagreeing for up to 200 ms; the coalescing version removes the unbounded case completely and leaves at most 20
+rebuilds per second per open view, which is the same order as the frame rate the sampler publishes at.
+
+**4. OpenComputers soft errors are about strings (documentation).** `ArgumentsImpl.optString` is
+`if (!isDefined(index)) default else checkString(index)`, so it only turns a **missing or nil** argument into the
+soft error; a defined argument of the wrong Lua type raises OC's own `bad argument #N (string expected, got number)`.
+`docs/opencomputers.md` said "anything else, including no argument at all", and the `getSensorHistory` javadocs said
+"every other bad value lands in the same place". Both are now accurate, the asymmetry that makes the mistake likely is
+called out (the machine callback takes `resolution` first, the Hub one `idOrPrefix` first), and no code changed: a
+wrong-typed argument raising `bad argument #N` is the convention every OpenComputers component follows, the message
+names the offending argument, and nothing is read or written.
+
+**5. The CI step is 600 s, and has been all along.** GS-114, GS-115 and GS-116 each wrote that
+`.github/workflows/build-and-test.yml` "still reads 300 s" and carried a "does not fit the CI step" open issue
+forward. Commit `774c55e` - the commit this whole milestone was written on top of - is the commit that changed
+`timeout: 300` to `timeout: 600`; its message says so. The claim was never checked against the file. 6,130 ticks is
+306.5 s, which fits 600 s with roughly 260 s to spare once the ~30 s of Gradle configuration and Forge/GTNH boot
+inside the same step is counted, so the open issue is **closed** and the suggestion to bring
+`OpenOsComputer.BATCH_TIMEOUT_TICKS` down from 450 towards the ~147 ticks observed is **withdrawn**: trimming it would
+only make the three batches that boot a real OpenOS computer flaky on a slower shared runner. `docs/testing.md` and
+the GS-112 note here carry the correction; the workflow's own stale `~280 s` comment was refreshed to 306.5 s.
+
+**6. `pageSetterClamps` was not discriminating.** Its fixture had two sensors, i.e. one page, so `clamp(v, 0, 0)`
+collapsed every input to 0 - which is also `gs_page`'s initial value - and all four assertions passed against a
+`HubSession.setPage` that ignored its argument. That left the C2S paging path with no in-game coverage that could
+fail. The fixture is now 17 sensors (two placed, fifteen registered straight through `SensorRegistryCore.heartbeat`
+at far coordinates, the way `SamplerTests` does), so the list is three pages, an in-range 1 must be stored verbatim,
+999 must land on page 2, and the short last page must still be padded to eight rows. Negative control 4 below is
+exactly the mutation the old test could not see.
+
+**Tests.** Unit 619 -> 620 in 40 classes (one new `ShippedClassesTest` case). In-game 156 -> 162: `HubGuiServerTests`
+11 -> 16 (`labelSetterRejectsStranger` reworked into `strangerSeesNothingAndWritesNothing`, plus
+`labelSetterRejectsAViewerWhoMayNotRename`, `buildUiRefusesWhenTheViewCapIsFull`, `aDisconnectReleasesTheView`,
+`aForcedCloseReleasesTheView` and `inputPacketsDoNotRebuild`) and `IdleCostTests` 5 -> 6. All six new cases are
+synchronous (0 observed ticks) and sit in existing batches, so **no batch was added and the worst-case budget stays
+6,130 ticks = 306.5 s over 40 batches**.
+
+`labelSetterRejectsAViewerWhoMayNotRename` needs `permissions.renameRequiresOfficer=true`, which is a server-wide
+override. It is safe beside its siblings because Horizon-QA *starts* the tests of a batch one after another
+(`GameTestBatchRunner.runBatch` calls `inst.start(world)` in a loop) and a fully synchronous test runs its whole body
+inside its own start: only a test that yields interleaves. Both override-using tests nevertheless clear the override
+synchronously at the end of their body as well as in `afterTest`, because `afterTest` hooks run later than the next
+test's start.
+
+**Results.** `spotlessApply` + `clean build`: BUILD SUCCESSFUL, checkstyle and spotlessCheck clean, **620 unit tests
+in 40 classes** green, 0 failures, 0 skipped. Full `gregscope` Horizon-QA run on a freshly created world with
+`config/gregscope.cfg` moved away: **162 passed, 4 skipped** (`ProbeBenchmarkTests`, opt-in), 0 failed, 0 timed out,
+0 infrastructure errors, status `PASSED`, exit code 0.
+
+**Negative controls (five, each applied alone, each reverted and verified byte-identical against a backup).**
+
+1. `buildUI`'s gate disabled (`denied` forced false): exactly **2 of 162** failed -
+   `strangerSeesNothingAndWritesNothing` ("a stranger was told how many sensors the Hub sees: expected <0> but found
+   <1>") and `buildUiRefusesWhenTheViewCapIsFull` (the same, for the cap). Nothing else noticed, which is the point:
+   before this ticket no test could see the C2S open path at all.
+2. `HubViewLifecycle.onPlayerLoggedOut` made a no-op: exactly **1 of 162** failed,
+   `aDisconnectReleasesTheView` ("a disconnect did not release the view").
+3. `refresh()` put back at the top of `HubSession.setSelectedRow`: exactly **1 of 162** failed,
+   `inputPacketsDoNotRebuild` ("a C2S packet rebuilt the view model: expected <1> but found <64>") - 64 packets, 64
+   rebuilds, the defect as it stood.
+4. `HubSession.setPage` made to ignore its argument (the `model.setPage(value)` call removed): exactly **1 of 162**
+   failed, `pageSetterClamps` ("an in-range page was not stored: expected <1> but found <0>"). The pre-follow-up
+   version of that test passed this mutation, which is why finding 6 existed.
+5. A `TickEvent` reference added to `HubViewLifecycle`: exactly **2 of 620** unit tests failed,
+   `ShippedClassesTest.theOnlyLogoutHandlerIsTheHubViewRelease` and `noPeriodicWorkHooks` - the new lift cannot widen
+   into a second tick handler unnoticed.
+
+**Carry-overs.** The `/gregscope stats` half of surfacing `HistoryPersistence.sensorsAbandoned()` is still open
+(GS-111's surface; no command was touched here). The CI-step headroom issue is closed, see above.

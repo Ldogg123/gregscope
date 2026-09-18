@@ -14,9 +14,21 @@ import java.util.UUID;
  * here is synchronized.
  *
  * <p>
- * GS-112 ships the question and the bookkeeping but opens no GUI yet, so only {@link #canOpen} is asked on the
- * right-click path: nothing is reserved for a window that does not exist, which is why a player cannot leak a slot by
- * clicking a Hub. GS-114 calls {@link #opened} once the MUI2 panel is really open and {@link #closed} when it closes.
+ * Only {@link #canOpen} is asked on the right-click path: nothing is reserved for a window that does not exist, which
+ * is why a player cannot leak a slot by clicking a Hub. GS-114 hangs {@link #opened} and {@link #closed} off
+ * ModularUI2's own panel lifecycle instead ({@code TileTelemetryHub.buildUI} registers them as the panel's open and
+ * close listeners), so a slot is held exactly while a panel is really open - including the erratum E9 case, where
+ * {@code GuiManager.open} returns immediately for a FakePlayer and no listener ever fires.
+ *
+ * <p>
+ * <b>Two releases ModularUI2's close listener does not give.</b> That listener only runs when the client sends a
+ * {@code CloseGuiPacket}, so two paths have to release the slot themselves, or it would be held until server stop:
+ * <ul>
+ * <li>a disconnect - {@code ServerConfigurationManager.playerLoggedOut} closes no container and ModularUI2's
+ * {@code ModularNetworkSide.onPlayerLeave} only clears its own maps - which {@code HubViewLifecycle} handles;</li>
+ * <li>a server-side force close, where {@code EntityPlayerMP.closeScreen} reaches only the empty
+ * {@code ModularContainer.onModularContainerClosed}, which {@code TileTelemetryHub.canInteractWith} handles.</li>
+ * </ul>
  */
 public final class HubViews {
 

@@ -31,12 +31,14 @@ import cpw.mods.fml.common.Loader;
 import cpw.mods.fml.common.ModContainer;
 import cpw.mods.fml.common.eventhandler.EventBus;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
+import cpw.mods.fml.common.gameevent.PlayerEvent;
 import cpw.mods.fml.common.gameevent.TickEvent;
 import cpw.mods.fml.common.registry.GameRegistry;
 import gregtech.api.enums.ItemList;
 import io.github.ldogg123.gregscope.GregScope;
 import io.github.ldogg123.gregscope.GregScopeTestHooks;
 import io.github.ldogg123.gregscope.GregScopeWorldEvents;
+import io.github.ldogg123.gregscope.hub.HubViewLifecycle;
 import io.github.ldogg123.gregscope.hub.TileTelemetryHub;
 import io.github.ldogg123.gregscope.integration.opencomputers.GregTechMachineEnvironment;
 import io.github.ldogg123.gregscope.sampling.SamplerStats;
@@ -53,12 +55,15 @@ import li.cil.oc.api.network.ManagedEnvironment;
  * does nothing while no sensor is LIVE. This is not a benchmark; nothing is timed.
  *
  * <p>
- * GS-108 and GS-110 changed what these tests assert, deliberately. Before GS-108, no GregScope object was subscribed
- * to any bus. Now exactly two are, and no more: {@code TelemetrySampler} on the FML bus (where 1.7.10 posts
- * {@code ServerTickEvent}), with exactly one {@code @SubscribeEvent} method taking a {@code ServerTickEvent}; and
- * {@code GregScopeWorldEvents} on the Forge bus, with exactly two {@code @SubscribeEvent} methods taking
- * {@code WorldEvent.Save} and {@code WorldEvent.Unload} (design-v0.2 sections 8.3 and 8.4). Neither is periodic: a
- * world save happens when Minecraft writes the world, and dimension 0 unloads only while the server stops. Everything
+ * GS-108, GS-110 and the GS-114 follow-up changed what these tests assert, deliberately. Before GS-108, no GregScope
+ * object was subscribed to any bus. Now exactly three are, and no more: {@code TelemetrySampler} on the FML bus (where
+ * 1.7.10 posts {@code ServerTickEvent}), with exactly one {@code @SubscribeEvent} method taking a
+ * {@code ServerTickEvent}; {@code HubViewLifecycle} on the FML bus as well, with exactly one {@code @SubscribeEvent}
+ * method taking a {@code PlayerLoggedOutEvent}, which releases a Hub view slot a disconnecting client never releases
+ * itself (design-v0.2 section 9.1); and {@code GregScopeWorldEvents} on the Forge bus, with exactly two
+ * {@code @SubscribeEvent} methods taking {@code WorldEvent.Save} and {@code WorldEvent.Unload} (design-v0.2 sections
+ * 8.3 and 8.4). None of them is periodic: a world save happens when Minecraft writes the world, dimension 0 unloads
+ * only while the server stops, and a logout fires once per player per session. Everything
  * else is unchanged: nothing on the terrain or ore generation buses, no registered or loaded GregScope tile entity, no
  * world generator, and no ticking OpenComputers environment.
  *
@@ -102,22 +107,21 @@ public class IdleCostTests {
             helper,
             "MinecraftForge.TERRAIN_GEN_BUS",
             MinecraftForge.TERRAIN_GEN_BUS,
-            0,
-            null);
+            0);
         listenerObjects += assertGregScopeListeners(
             helper,
             "MinecraftForge.ORE_GEN_BUS",
             MinecraftForge.ORE_GEN_BUS,
-            0,
-            null);
-        // GS-108 (design-v0.2 section 1.4): exactly one, the sampler.
+            0);
+        // GS-108 (design-v0.2 section 1.4): the sampler, plus the GS-114 follow-up's logout hook, and nothing else.
         listenerObjects += assertGregScopeListeners(
             helper,
             "FMLCommonHandler.bus()",
             FMLCommonHandler.instance()
                 .bus(),
-            1,
-            TelemetrySampler.class);
+            2,
+            TelemetrySampler.class,
+            HubViewLifecycle.class);
         // GT, OC and Forge itself subscribe many listeners; zero would mean the scan is broken.
         helper.assertTrue(listenerObjects > 10, "event bus scan found only " + listenerObjects + " listener objects");
 
@@ -257,6 +261,33 @@ public class IdleCostTests {
     }
 
     /**
+     * GS-114 follow-up, design-v0.2 section 9.1: the second FML-bus hook declares exactly one {@code @SubscribeEvent}
+     * method, it takes a {@code PlayerLoggedOutEvent}, and it does not take the tick event or anything else that
+     * fires per tick. What the handler <em>does</em> (release the viewer's slot of the open-view cap) is
+     * {@code HubGuiServerTests.aDisconnectReleasesTheView}'s job.
+     */
+    @GameTest(batch = BATCH)
+    public static void exactlyOneLogoutHandler(GameTestHelper helper) {
+        List<Method> handlers = new ArrayList<>();
+        for (Method method : HubViewLifecycle.instance()
+            .getClass()
+            .getMethods()) {
+            if (method.isAnnotationPresent(SubscribeEvent.class)) {
+                handlers.add(method);
+            }
+        }
+        helper.assertEquals(1, handlers.size(), "@SubscribeEvent methods on the logout hook: " + handlers);
+        Method handler = handlers.get(0);
+        helper.assertEquals(1, handler.getParameterTypes().length, "handler arity: " + handler);
+        helper.assertEquals(
+            PlayerEvent.PlayerLoggedOutEvent.class,
+            handler.getParameterTypes()[0],
+            "the handler must take a PlayerLoggedOutEvent");
+        System.out.println("[GregScope gametest] idle#6 one @SubscribeEvent logout method: " + handler);
+        helper.succeed();
+    }
+
+    /**
      * GS-110, design-v0.2 sections 8.3 and 8.4: the Forge-bus hook subscribes to exactly the two world events the
      * design names, and to nothing that fires per tick. {@code WorldEvent.PotentialSpawns} is a {@code WorldEvent}
      * too and fires several times per chunk per tick, so a handler taking the base class would put GregScope on a hot
@@ -339,7 +370,7 @@ public class IdleCostTests {
      * (the listener object's class and the owning mod container), and returns the number of listener objects seen.
      */
     private static int assertGregScopeListeners(GameTestHelper helper, String label, EventBus bus, int expected,
-        Class<?> expectedType) {
+        Class<?>... expectedTypes) {
         Map<?, ?> listeners = (Map<?, ?>) readField(helper, bus, EventBus.class, "listeners");
         Map<?, ?> owners = (Map<?, ?>) readField(helper, bus, EventBus.class, "listenerOwners");
         List<Object> ours = new ArrayList<>();
@@ -360,16 +391,29 @@ public class IdleCostTests {
             }
         }
         helper.assertEquals(expected, owned, label + " listeners owned by the gregscope mod container");
-        if (expected > 0) {
-            helper.assertInstanceOf(expectedType, ours.get(0), label + " GregScope listener");
+        helper.assertEquals(expected, expectedTypes.length, label + " expected listener types");
+        for (Class<?> expectedType : expectedTypes) {
+            List<Object> matches = new ArrayList<>();
+            for (Object candidate : ours) {
+                if (expectedType.isInstance(candidate)) {
+                    matches.add(candidate);
+                }
+            }
+            helper
+                .assertEquals(1, matches.size(), label + " listeners of type " + expectedType.getName() + ": " + ours);
+            Object found = matches.get(0);
             if (expectedType == TelemetrySampler.class) {
-                helper
-                    .assertSame(GregScope.sampler(), ours.get(0), "the subscribed sampler is not GregScope.sampler()");
-            } else {
+                helper.assertSame(GregScope.sampler(), found, "the subscribed sampler is not GregScope.sampler()");
+            } else if (expectedType == GregScopeWorldEvents.class) {
                 helper.assertSame(
                     GregScopeWorldEvents.instance(),
-                    ours.get(0),
+                    found,
                     "the subscribed hook is not GregScopeWorldEvents.instance()");
+            } else {
+                helper.assertSame(
+                    HubViewLifecycle.instance(),
+                    found,
+                    "the subscribed hook is not HubViewLifecycle.instance()");
             }
         }
         return listeners.size();

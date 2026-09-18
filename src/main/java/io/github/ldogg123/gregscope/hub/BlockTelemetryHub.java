@@ -14,6 +14,8 @@ import net.minecraft.util.MathHelper;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.FakePlayer;
 
+import com.cleanroommc.modularui.factory.GuiFactories;
+
 import io.github.ldogg123.gregscope.GregScope;
 import io.github.ldogg123.gregscope.GregScopeAssets;
 
@@ -25,17 +27,27 @@ import io.github.ldogg123.gregscope.GregScopeAssets;
  * <p>
  * Everything this block decides is decided on the server. {@code onBlockActivated} returns true on the client (so the
  * client plays the use animation and sends nothing else) and, on the server, checks design-v0.2 section 5 access and
- * then the section 9.1 open-view cap, telling the player which one refused. GS-114 opens the MUI2 panel at the point
- * marked below; until then a permitted right-click opens nothing, which is what the ticket allows, and nothing is
- * reserved in {@link HubViews} for a window that does not exist.
+ * then the section 9.1 open-view cap, telling the player which one refused, and finally hands the viewer to
+ * ModularUI2's tile entity factory. Nothing is reserved in {@link HubViews} here: the panel's own open listener does
+ * that, so an open that never happens (erratum E9's FakePlayer) cannot leak a slot of the cap.
+ *
+ * <p>
+ * <b>This is not the only entry point.</b> ModularUI2's {@code OpenGuiPacket} is a client-to-server packet whose
+ * {@code PosGuiData} is built from three client-chosen varints, so a modified client can reach
+ * {@code TileTelemetryHub.buildUI} without this method ever running. The two checks below are therefore the
+ * <em>message</em> path - they are what tells a player why the Hub did not open - and {@code buildUI} makes the same
+ * two checks itself and is what actually keeps the data in.
  *
  * <p>
  * <b>Textures.</b> Section 9.1 wants {@code telemetry_hub_front/side/top}. Per-side icons need
  * {@code registerBlockIcons(IIconRegister)} and {@code getIcon(int, int)}, which are {@code @SideOnly(CLIENT)} in
  * 1.7.10 ({@code net/minecraft/block/Block.java:1469} and {@code :651}), so this class would have to name a client
  * class. GS-112 does not lift that guard: all three PNGs are committed, and the block asks for the side texture with
- * {@code setBlockTextureName}, which Minecraft's own client-side {@code registerBlockIcons} reads. GS-114, which
- * already needs {@code @SideOnly(CLIENT)} for {@code createScreen}, wires the front and top icons.
+ * {@code setBlockTextureName}, which Minecraft's own client-side {@code registerBlockIcons} reads. GS-114 does not
+ * lift it either: its client lift is exactly {@code TileTelemetryHub.createScreen}, and per-side icons would need
+ * this class to name {@code net.minecraft.client.renderer.texture.IIconRegister}, which is a wider lift than
+ * section 1.4 allows for a GUI ticket. The front and top icons are client rendering, so they stay with GS-121 and
+ * v0.2.1's GT hull icons; until then every side draws {@code telemetry_hub_side}.
  */
 public final class BlockTelemetryHub extends Block implements ITileEntityProvider {
 
@@ -88,7 +100,8 @@ public final class BlockTelemetryHub extends Block implements ITileEntityProvide
 
     /**
      * Section 9.1: on the client this only returns true; on the server it checks access, then the open-view cap, and
-     * would then open the GUI.
+     * then opens the GS-114 panel through {@code GuiFactories.tileEntity()} (the ModularUI2 precedent
+     * {@code mui2/.../test/TestBlock.java:30-32}).
      */
     @Override
     public boolean onBlockActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
@@ -117,7 +130,10 @@ public final class BlockTelemetryHub extends Block implements ITileEntityProvide
             player.addChatMessage(new ChatComponentTranslation(GregScopeAssets.LANG_HUB_BUSY));
             return true;
         }
-        // GS-114 opens the MUI2 panel here and calls TelemetryHubs.views().opened(viewer).
+        // The view is reserved by the panel's own open listener (TileTelemetryHub.buildUI), never here: a GUI that
+        // does not really open - erratum E9's FakePlayer, for one - must not hold a slot of the section 9.1 cap.
+        GuiFactories.tileEntity()
+            .open(player, x, y, z);
         return true;
     }
 

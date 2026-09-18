@@ -20,9 +20,13 @@ sourceSets {
     }
 }
 
-// The OpenOS game test runs the documented example script itself, so copy the exact repo file instead of a hand-kept copy.
+// The OpenOS game tests run the documented example scripts themselves, so copy the exact repo files instead of
+// hand-kept copies (GS-116 adds the Telemetry Hub example beside the v0.1 snapshot one).
 tasks.named("processGametestResources", ProcessResources) {
     from("docs/examples/gregscope-snapshot.lua") {
+        into("gregscope-gametest")
+    }
+    from("docs/examples/gregscope-hub.lua") {
         into("gregscope-gametest")
     }
     // GS-109: RegistryCodecTests decodes the golden registry.dat that tools/gen_fixtures.py writes. Copy the exact

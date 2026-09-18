@@ -138,12 +138,17 @@ class PureSourcesTest {
         "hub/HubWindow.java",
         "hub/HubDetail.java",
         "hub/HubViewModel.java",
+        // GS-115 (sections 10.1, 10.4): the OpenComputers table builders, which take no game type at all.
+        "integration/opencomputers/LuaTables.java",
+        // GS-116 (sections 10.3, 5): one Telemetry Hub's scope over a frame, with the paging and id resolution the
+        // gregscope_hub callbacks need. It takes the team answers as a TeamResolver, so it needs no game type either.
+        "integration/opencomputers/HubScope.java",
         // The settings a LimitsView copies; pure in fact since GS-101, and reached by the bytecode check.
         "config/Settings.java",
         "config/ConfigKeys.java");
 
     private static final List<String> PURE_PACKAGES = Arrays
-        .asList("history", "sensor", "sampling", "access", "registry", "model", "command", "hub");
+        .asList("history", "sensor", "sampling", "access", "registry", "model", "command", "hub", "integration");
 
     /** Files in {@link #PURE_PACKAGES} allowed to touch game classes, each on purpose. */
     private static final Set<String> IMPURE = new HashSet<>(
@@ -182,7 +187,29 @@ class PureSourcesTest {
             // the package (the record codec and the view cap) may name none of them.
             "hub/BlockTelemetryHub.java",
             "hub/TileTelemetryHub.java",
-            "hub/TelemetryHubs.java"));
+            "hub/TelemetryHubs.java",
+            // GS-114: the ModularUI2 half of the Hub (design-v0.2 sections 9.2 and 9.3). HubPacketIo is the
+            // PacketBuffer side of the ByteSink/ByteSource seam, exactly as NbtKeyValue is the NBTTagCompound side of
+            // KeyValue; HubPanel is the widget tree and the named sync handlers; HubSession is the per-viewer object
+            // that reaches the live registry. The pure half of the package - the DTOs, their codecs and the view
+            // model - may name none of them, which is what keeps the seam one-way and keeps HubViewModel unit tested.
+            "hub/HubPacketIo.java",
+            "hub/HubPanel.java",
+            "hub/HubSession.java",
+            // GS-114 follow-up: the FML logout hook. It names the FML bus and the logout event, so it is an adapter
+            // too; all it does with them is call HubViews.closed.
+            "hub/HubViewLifecycle.java",
+            // GS-115 adds the integration package to the pure scan for the sake of LuaTables. The v0.1 classes beside
+            // it are the OpenComputers adapters by definition: the driver and the environment name li.cil.oc types
+            // and the world, and the registration class names the OC driver registry. LuaTables may name none of
+            // them, which is what keeps the table builders unit tested on a plain JVM.
+            "integration/opencomputers/GregTechMachineDriver.java",
+            "integration/opencomputers/GregTechMachineEnvironment.java",
+            "integration/opencomputers/OpenComputersIntegration.java",
+            // GS-116: the same pair for the gregscope_hub component. The driver and the environment name li.cil.oc
+            // types, the world and the Hub's tile entity; HubScope, which they build and read, may name none of them.
+            "integration/opencomputers/HubDriver.java",
+            "integration/opencomputers/HubEnvironment.java"));
 
     static final List<String> FORBIDDEN = Arrays.asList(
         "net.minecraft.",

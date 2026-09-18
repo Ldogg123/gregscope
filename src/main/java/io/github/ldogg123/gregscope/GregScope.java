@@ -27,6 +27,7 @@ import io.github.ldogg123.gregscope.history.HistoryPersistence;
 import io.github.ldogg123.gregscope.history.IoListener;
 import io.github.ldogg123.gregscope.history.NioFileStore;
 import io.github.ldogg123.gregscope.history.SizeCeilings;
+import io.github.ldogg123.gregscope.hub.HubViewLifecycle;
 import io.github.ldogg123.gregscope.hub.TelemetryHubs;
 import io.github.ldogg123.gregscope.registry.RegistryPersistence;
 import io.github.ldogg123.gregscope.registry.SensorRegistry;
@@ -197,6 +198,9 @@ public class GregScope {
         // GS-110: the overworld save and unload triggers of design-v0.2 sections 8.3 and 8.4. Registered once, for
         // the life of the JVM; the handlers do nothing unless a server with GregScope services is running.
         GregScopeWorldEvents.register();
+        // GS-114 follow-up: a disconnect never reaches ModularUI2's panel close listener, so the Hub's open-view cap
+        // releases the slot from the FML logout event instead. Registered once, for the life of the JVM.
+        HubViewLifecycle.register();
     }
 
     @Mod.EventHandler

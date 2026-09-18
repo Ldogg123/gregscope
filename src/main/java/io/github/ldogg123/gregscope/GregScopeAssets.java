@@ -65,6 +65,45 @@ public final class GregScopeAssets {
     /** Section 9.1: {@code limits.maxOpenHubViews} views are already open, server-wide. */
     public static final String LANG_HUB_BUSY = DOMAIN + ".hub.busy";
 
+    // --- Telemetry Hub GUI (design-v0.2 sections 9.2 and 9.3, GS-114). The DTOs carry codes and numbers; these keys
+    // are where the client turns them into text.
+
+    /** The header line: owner, total sensors, live sensors. */
+    public static final String LANG_HUB_HEADER = DOMAIN + ".hub.header";
+    /** Appended to the header while {@code HistoryPersistence.sensorsAbandoned()} is above zero. */
+    public static final String LANG_HUB_ABANDONED = DOMAIN + ".hub.abandoned";
+    /** The Hub's {@code gsHub} record is newer than this build understands (section 9.1). */
+    public static final String LANG_HUB_UNSUPPORTED = DOMAIN + ".hub.unsupported";
+    /** A Hub placed by a FakePlayer has no owner, so nothing is ever in its scope (section 5). */
+    public static final String LANG_HUB_UNOWNED = DOMAIN + ".hub.unowned";
+    /** The All/Problems toggle (section 9.2). */
+    public static final String LANG_HUB_FILTER_ALL = DOMAIN + ".hub.filter.all";
+    public static final String LANG_HUB_FILTER_PROBLEMS = DOMAIN + ".hub.filter.problems";
+    /** The label field's caption (section 9.2). */
+    public static final String LANG_HUB_LABEL = DOMAIN + ".hub.label";
+    /** No row is selected, so the detail pane is empty. */
+    public static final String LANG_HUB_NO_SELECTION = DOMAIN + ".hub.no_selection";
+    /** The selected sensor is a tombstone: there is no ring to summarize. */
+    public static final String LANG_HUB_NO_HISTORY = DOMAIN + ".hub.no_history";
+    /** Section 8.3: the history file has not been read back yet. */
+    public static final String LANG_HUB_LOADING = DOMAIN + ".hub.loading";
+    /** The detail pane's identity line: name, kind, dimension, position, side, short id. */
+    public static final String LANG_HUB_DETAIL_WHERE = DOMAIN + ".hub.detail.where";
+    /** The detail pane's state line: state, status, progress, maintenance, sample age. */
+    public static final String LANG_HUB_DETAIL_STATE = DOMAIN + ".hub.detail.state";
+    /** The detail pane's energy line: EU/t, stored, capacity. */
+    public static final String LANG_HUB_DETAIL_ENERGY = DOMAIN + ".hub.detail.energy";
+    /** The "Last 5 min" summary line. */
+    public static final String LANG_HUB_WINDOW_5M = DOMAIN + ".hub.window.5m";
+    /** The "Last 24 h" summary line. */
+    public static final String LANG_HUB_WINDOW_24H = DOMAIN + ".hub.window.24h";
+    /** The sampler footer: p99 ms/tick, skipped ticks, whether sampling is on. */
+    public static final String LANG_HUB_SAMPLER = DOMAIN + ".hub.sampler";
+    public static final String LANG_HUB_SAMPLING_ON = DOMAIN + ".hub.sampling.on";
+    public static final String LANG_HUB_SAMPLING_OFF = DOMAIN + ".hub.sampling.off";
+    /** {@code gregscope.hub.availability.<id>}, one per section 10.1 availability id. */
+    public static final String LANG_HUB_AVAILABILITY_PREFIX = DOMAIN + ".hub.availability.";
+
     // --- /gregscope (design-v0.2 section 11, GS-111). Every line is a ChatComponentTranslation with one of these
     // keys; the values inside a line are data (stable ids and numbers), never translated text.
 
@@ -152,5 +191,13 @@ public final class GregScopeAssets {
 
     public static String gapKey(String gapId) {
         return LANG_GAP_PREFIX + gapId;
+    }
+
+    /**
+     * The Hub GUI's word for a lifecycle state, by the stable section 10.1 availability id
+     * ({@code HubCodecs.availabilityId}).
+     */
+    public static String hubAvailabilityKey(String availabilityId) {
+        return LANG_HUB_AVAILABILITY_PREFIX + availabilityId;
     }
 }

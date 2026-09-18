@@ -1,7 +1,12 @@
--- GregScope game test runner (OpenComputersExampleScriptTests). OpenOS runs this file once at boot as the autorun of
--- the writable disk. It runs the unmodified docs/examples/gregscope-snapshot.lua with stdout redirected to a file on
--- the same disk, catches every Lua error, and publishes a status marker last so Java never reads partial output.
--- Never add an init.lua next to this file: the BIOS would boot it instead of the OpenOS floppy.
+-- GregScope game test runner (OpenComputersExampleScriptTests, HubExampleScriptTests). OpenOS runs this file once at
+-- boot as the autorun of the writable disk. It runs one unmodified docs/examples/*.lua script with stdout redirected
+-- to a file on the same disk, catches every Lua error, and publishes a status marker last so Java never reads partial
+-- output. Never add an init.lua next to this file: the BIOS would boot it instead of the OpenOS floppy.
+--
+-- Java chooses what to run by writing two optional files next to this one:
+--   gregscope-script.txt   the script file name (default gregscope-snapshot.lua)
+--   gregscope-await.txt    a callback name to wait for on some component (default getSnapshot)
+--   gregscope-args.txt     one argument for a second run, whose output goes to gregscope-dump.txt
 
 local component = require("component")
 local computer = require("computer")
@@ -28,17 +33,30 @@ local function traceback(message)
   return debug.traceback(tostring(message), 2)
 end
 
+local function readLine(name)
+  local file = io.open(fs.concat(root, name), "r")
+  if not file then
+    return nil
+  end
+  local line = file:read("*l")
+  file:close()
+  return line
+end
+
+local scriptName = readLine("gregscope-script.txt") or "gregscope-snapshot.lua"
+local awaitMethod = readLine("gregscope-await.txt") or "getSnapshot"
+
 local out = assert(io.open(outPath, "w"))
 local status, detail = "ok", ""
 
 local runnerOk, runnerErr = xpcall(function()
-  -- Java only starts the computer once the Adapter component is on the network; this bounded wait is a safety net.
+  -- Java only starts the computer once the component is on the network; this bounded wait is a safety net.
   local deadline = computer.uptime() + 5
   repeat
     local found = false
     for address in component.list() do
       local candidate = component.proxy(address)
-      if candidate and candidate.getSnapshot then
+      if candidate and candidate[awaitMethod] then
         found = true
         break
       end
@@ -49,7 +67,7 @@ local runnerOk, runnerErr = xpcall(function()
     os.sleep(0.25)
   until computer.uptime() > deadline
 
-  local chunk, loadErr = loadfile(fs.concat(root, "gregscope-snapshot.lua"))
+  local chunk, loadErr = loadfile(fs.concat(root, scriptName))
   if not chunk then
     status, detail = "error", "load error: " .. tostring(loadErr)
     return
