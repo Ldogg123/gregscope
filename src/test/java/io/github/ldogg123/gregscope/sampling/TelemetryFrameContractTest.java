@@ -686,12 +686,14 @@ class TelemetryFrameContractTest {
         int globalSeries = sum(global);
 
         assertEquals(16, commonSeries, "the common group is the 16 series design-v0.3 section 6.4 counts");
-        assertEquals(32, machineSeries, "the machine group");
-        assertEquals(48, commonSeries + machineSeries, "the per-machine-sensor ceiling");
+        // 32 before v0.3; the seven single-series buffer gauges of section 7.1 took it to 39. Pinned here rather
+        // than read from the document so that adding a family is a deliberate act with a number attached to it.
+        assertEquals(39, machineSeries, "the machine group");
+        assertEquals(55, commonSeries + machineSeries, "the per-machine-sensor ceiling");
         assertEquals(30, globalSeries, "the global series count");
 
         int perSensor = commonSeries + machineSeries;
-        assertDocContains("**48**", "the per-sensor ceiling");
+        assertDocContains("**55**", "the per-sensor ceiling");
         assertDocContains(grouped(perSensor * 256), "256 sensors");
         assertDocContains(grouped(perSensor * 512), "512 sensors");
         assertDocContains(grouped(perSensor * 1024), "1024 sensors");

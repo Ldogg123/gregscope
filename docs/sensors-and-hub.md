@@ -72,7 +72,60 @@ robot - is in nobody's scope and nobody's Hub; only operators see it. "Operator"
 list at level `permissions.opLevel` or above; setting that key to `0` makes every player an operator, which is
 useful on a private server and a bad idea on a public one.
 
-## 4. Sensor lifecycle
+## 4. What a machine is holding
+
+Since v0.3, a sensor also reports the machine's own **buffers** — what is in its hatches, tanks and slots right
+now. This is read from the machine itself, so it is the same whoever filled it: a GT pipe, an EnderIO conduit, an
+AE2 stocking hatch, or you by hand.
+
+The Hub's detail panel shows it as one line:
+
+```
+in 12% FALLING
+```
+
+A machine at 12% is unremarkable. A machine at 12% **and falling** is about to stop, and that is the difference
+worth knowing. The direction comes from the last five minutes.
+
+`/gregscope info` shows the same thing with the contents spelled out, and OpenComputers' `getSnapshot` carries it
+as `inputs`, `outputs`, `inputSaturation` and friends.
+
+### What it can and cannot tell you
+
+| | |
+|---|---|
+| "Is this EBF about to run out of oxygen?" | **Yes.** That is what the line is for. |
+| "Is the output backing up?" | **Yes** — output saturation climbing toward 100%. |
+| "What exactly is in there?" | **Yes**, the largest four, then a rollup. |
+| "How much oxygen per second does it use?" | **No.** |
+| "Who supplied it?" | **No.** |
+
+The last two are worth being clear about, because they are the obvious next question. GregScope measures **levels,
+not rates**. A level that dropped by 500 L might be 500 consumed, or 1,000 consumed while 500 arrived — those are
+indistinguishable from outside. Metering the flow instead was designed, prototyped and then
+[deliberately abandoned](flow-meters.md): a meter can only see what passes through the meter, so in a base fed by
+AE2 and conduits it would have reported confident wrong numbers.
+
+### ME hatches
+
+A **fluid** hatch backed by an ME network reports what the **network** holds, not the trickle buffered in the
+hatch. That is the number you want, and GT computes it for us.
+
+Two consequences:
+
+- Such an input shows **`n/a`** rather than a percentage, because "the network" has no capacity to be a fraction
+  of. `n/a` and `0%` mean different things and the GUI keeps them apart.
+- **ME item busses do not report amounts yet** — they are counted, so you can see the input is ME-backed, but the
+  quantity is not available without querying AE2 directly. That is a known gap, not a bug.
+
+### What it costs
+
+The walk is measured, not assumed: **p50 0.3 µs, p99 0.7 µs** per machine on a formed EBF, against the 1 ms/tick
+budget the whole sampler shares. For scale, reading the machine's state — which GregScope already did — costs about
+3.4 µs. It also never writes to your machines; the obvious GT API for this quietly does, which is why GregScope
+does not use it.
+
+## 5. Sensor lifecycle
 
 A sensor is always in exactly one of these states, and `/gregscope list` filters on them:
 
@@ -80,7 +133,7 @@ A sensor is always in exactly one of these states, and `/gregscope list` filters
 |---|---|
 | `live` | the chunk is loaded and the machine is being sampled |
 | `unloaded` | the chunk is not loaded. The sensor still exists; history simply records a gap |
-| `over cap` | the sensor exists but is not being sampled, because a cap was reached (section 5) |
+| `over cap` | the sensor exists but is not being sampled, because a cap was reached (section 6) |
 | `missing` | the chunk loaded, but the machine the sensor pointed at is gone |
 | `in item` | the cover was picked up and is sitting in an inventory |
 | `removed` | the sensor was destroyed |
@@ -93,7 +146,7 @@ sensor that stays unloaded for `history.staleExpiryDays` days expires and is del
 deliberate and is enforced by tests: nothing GregScope does will keep your world spinning chunks you did not ask
 for.
 
-## 5. Limits
+## 6. Limits
 
 Sampling costs server time, so it is bounded at both ends.
 
@@ -105,7 +158,7 @@ Sampling costs server time, so it is bounded at both ends.
   cycle so you can see the real cost.
 - `limits.maxOpenHubViews` caps how many Hub GUIs can be open at once across the server.
 
-## 6. Configuration
+## 7. Configuration
 
 `config/gregscope.cfg`, read once at startup. **Changing any of these needs a server restart.**
 
@@ -147,7 +200,7 @@ Sampling costs server time, so it is bounded at both ends.
 |---|---|---|---|
 | `hub.renameCooldownSeconds` | `5` | 0-300 | Seconds a player waits between two label changes. |
 
-## 7. Commands
+## 8. Commands
 
 `/gregscope` is available to everyone; each subcommand checks its own permission, and you only ever see sensors you
 are allowed to see.
@@ -166,7 +219,7 @@ are ignored. If a prefix matches more than one sensor you get the candidates bac
 are not allowed to see gives exactly the same "not found" answer as one that does not exist, so the command cannot
 be used to probe for other players' machines.
 
-## 8. Removing things
+## 9. Removing things
 
 **Removing a sensor** keeps its history for `history.removedRetentionHours`, then deletes it. `/gregscope purge`
 deletes it at once.
@@ -180,7 +233,7 @@ ask whether to continue without the missing block and item entries; say yes.
   reinstalling GregScope picks the registry and the history straight back up. The file format is documented in
   [history-format-v1.md](history-format-v1.md) so the data is readable without the mod at all.
 
-## 9. Where to look next
+## 10. Where to look next
 
 - [opencomputers.md](opencomputers.md) - reading sensors and Hubs from OpenComputers, with example scripts.
 - [history-format-v1.md](history-format-v1.md) - the byte layout of the history files.

@@ -314,6 +314,13 @@ kind=machine only".
 | `gregscope_sensor_energy_capacity_eu` | gauge | `sensor_id` | 1 | snapshot key `energyCapacity` |
 | `gregscope_sensor_maintenance_issues` | gauge | `sensor_id` | 1 | snapshot key `maintenanceIssues` |
 | `gregscope_sensor_formed` | gauge | `sensor_id` | 1 | snapshot key `formed` |
+| `gregscope_sensor_input_fill_ratio` | gauge | `sensor_id` | 1 | snapshot key `inputSaturation` |
+| `gregscope_sensor_output_fill_ratio` | gauge | `sensor_id` | 1 | snapshot key `outputSaturation` |
+| `gregscope_sensor_input_units` | gauge | `sensor_id` | 1 | snapshot key `inputTotal` |
+| `gregscope_sensor_output_units` | gauge | `sensor_id` | 1 | snapshot key `outputTotal` |
+| `gregscope_sensor_input_capacity_units` | gauge | `sensor_id` | 1 | snapshot key `inputCapacity` |
+| `gregscope_sensor_output_capacity_units` | gauge | `sensor_id` | 1 | snapshot key `outputCapacity` |
+| `gregscope_sensor_me_inputs` | gauge | `sensor_id` | 1 | snapshot key `meInputs` |
 | `gregscope_sensor_recipes_completed` | gauge | `sensor_id` | 1 | snapshot key `recipesCompleted` |
 | `gregscope_sensor_state_samples_total` | counter | `sensor_id`, `state` | 10 | `MachineCountersView.stateSamplesTotal()` |
 | `gregscope_sensor_eu_consumed_sampled_total` | counter | `sensor_id` | 1 | `MachineCountersView.euConsumedSampledTotal()` |
@@ -321,6 +328,32 @@ kind=machine only".
 | `gregscope_sensor_recipes_counter_resets_total` | counter | `sensor_id` | 1 | `MachineCountersView.recipesCounterResetsTotal()` |
 
 <!-- /contract:families:machine -->
+
+### 7.1 The buffer families say level, never rate
+
+Added in v0.3. They report what a machine is **holding**, read from its own hatches and slots, so they are the same
+whoever filled them.
+
+**`_fill_ratio` is `NaN` when nothing reports a capacity**, which is not the same as `0`. An ME-backed input has no
+capacity that means anything, and a machine with an empty tank genuinely is at zero. An exporter must emit `NaN`
+rather than collapse the two - Prometheus handles `NaN` natively and a dashboard that shows "no data" is telling
+the truth, while one that shows 0% is not.
+
+**`_units` is litres for fluids and item counts for items, summed together.** That is deliberately a crude number:
+it exists so `inputTotal / inputCapacity` reconciles, not as a physical quantity. Per-resource breakdown is
+**not exported**, because resource names as labels is exactly what section 4's never-labels rule forbids - a base
+with a few hundred machines and a dozen fluids each would multiply the series count without bound. The breakdown
+lives in the snapshot, the Hub and OpenComputers, where it is read one machine at a time.
+
+**The trend is not exported either, on purpose.** GregScope computes a rising/falling/steady direction for its own
+GUI, but Prometheus derives that from a gauge's own history far better than a pre-computed enum could - `deriv()`
+or `delta()` over `gregscope_sensor_input_fill_ratio` gives a real rate of change over whatever window the alert
+wants, instead of GregScope's fixed five minutes. Exporting the direction would add a closed label set and tell a
+consumer less than it can already work out.
+
+**And none of these is a throughput.** A fill ratio that fell cannot distinguish consumption from a slow refill;
+[flow-meters.md](flow-meters.md) records why the attempt to measure throughput honestly was abandoned. An alert
+should be written on the level and its derivative, never presented as litres per second.
 
 **32 series per machine sensor**, 19 gauges and 13 counter series.
 
@@ -473,10 +506,17 @@ comparable with the tick budget of design-v0.2 section 6.3.
 | Group | Series | Where |
 |---|---|---|
 | Common, every kind | 16 | [section 6](#6-per-sensor-families-common-to-every-kind) |
-| `kind="machine"` | 32 | [section 7](#7-per-sensor-families-kindmachine) |
-| **Ceiling, a machine sensor** | **48** | |
-| `kind="item_flow"` / `"fluid_flow"` (v0.3) | 16 | design-v0.3 section 6.4 |
-| **Ceiling, a v0.3 flow meter** | **32** | design-v0.3 section 6.4, "16 common + 16 flow = 32" |
+| `kind="machine"` | 39 | [section 7](#7-per-sensor-families-kindmachine) |
+| **Ceiling, a machine sensor** | **55** | |
+
+The machine group was 32 before v0.3 added the seven buffer gauges (`section 7.1`). They are all single-series:
+per-resource breakdown is deliberately not exported, because resource names as labels is what
+[section 4](#4-closed-label-sets)'s never-labels rule forbids, and a base with a few hundred machines holding a
+dozen fluids each would multiply the series count without bound.
+
+The v0.3 flow-meter rows this table used to reserve are **gone**: flow meters were cancelled
+([flow-meters.md](flow-meters.md)), and `item_flow` / `fluid_flow` remain reserved values of `kind` without any
+families behind them.
 
 `TelemetryFrameContractTest` re-adds the Series column of each family table and fails if these numbers move.
 
@@ -484,9 +524,9 @@ comparable with the tick budget of design-v0.2 section 6.3.
 
 | Sensors | Per-sensor series | Global series | Total |
 |---|---|---|---|
-| 256 (`limits.maxSensors` default) | 12,288 | 30 | **12,318** |
-| 512 (`exporter.maxSensorsExported` default) | 24,576 | 30 | **24,606** |
-| 1,024 (`limits.maxSensors` maximum) | 49,152 | 30 | **49,182** |
+| 256 (`limits.maxSensors` default) | 14,080 | 30 | **14,110** |
+| 512 (`exporter.maxSensorsExported` default) | 28,160 | 30 | **28,190** |
+| 1,024 (`limits.maxSensors` maximum) | 56,320 | 30 | **56,350** |
 
 These are ceilings: a singleblock machine omits `formed`, `maintenanceIssues` and `recipesCompleted`, an unloaded
 sensor omits all ten snapshot gauges, and a tombstone omits the counters too.
@@ -496,7 +536,7 @@ id-sorted sensor list. It is a prefix of a stable order, so the same sensors are
 rather than a changing sample. When it truncates, the exporter says so in its own metric rather than silently: v0.4
 adds `gregscope_exporter_sensors_dropped` to the global table at that point.
 
-**For context:** 12,318 series at a 15 s scrape interval is about 820 samples/s, which a single small Prometheus
+**For context:** 14,110 series at a 15 s scrape interval is about 940 samples/s, which a single small Prometheus
 handles without comment. 49,182 at 5 s is about 9,800 samples/s, which is a real load and is why the 1,024 cap and
 `maxSensorsExported` both exist.
 

@@ -146,3 +146,53 @@ otherwise, the fallback stands.
 
 **Gate before GS-303:** GS-302's benchmark must show the walk fits the budget on a large multiblock. If it does not,
 section 5's fallback applies and the design is amended before any surface is built on it.
+
+
+### v0.3 GS-301 to GS-305 (2026-09-19): machine buffer telemetry
+
+Replaces the cancelled flow meters. Where a meter could only see what passed through its own cover, this reads what
+the machine itself is holding, so an AE2 hatch, an EnderIO conduit and a GT pipe all look the same to it.
+
+**Three findings shaped it, each verified before code was written.**
+
+1. **`getStoredFluids()` is unusable.** It calls `setHatchRecipeMap` for every input hatch, which assigns
+   `hatch.mRecipeMap` - a write to the machine, and never writing to a machine is the product's whole premise. The
+   walk goes through the public hatch lists instead. `BufferProbeTests.theWalkDoesNotWriteToTheMachine` proves it
+   both ways: it clears the field, runs the walk, asserts nothing moved, then calls GT's own method and asserts it
+   **does** set it - "walk wrote nothing; getStoredFluids set mRecipeMap on 1 hatches".
+2. **ME fluid hatches can be read honestly after all.** The first design flagged them and reported no amount. The
+   user pushed back, correctly: the interesting number is what the network holds, and `getTankInfo` already
+   resolves each configured slot against the network with `extractItems(..., SIMULATE, ...)`. Reading every hatch
+   through `getTankInfo` therefore gets network amounts with **no AE2 dependency at all**. ME item busses are the
+   exception - `getStackInSlot` returns null outside recipe processing and the method that holds the amount writes
+   to the hatch - so they stay flagged-only until GS-306.
+3. **The reserved byte was enough for the trend.** The second ring's `u16` at offset 10 now carries input
+   saturation, so the five-minute direction comes from 300 real samples with no format bump and no extra memory.
+
+**Cost, measured rather than asserted:** p50 0.3 us, p99 0.7 us per machine, against the 1 ms/tick budget the
+sampler shares. The existing snapshot of the same machine is p50 3.4 us, so the walk adds under a tenth of what the
+probe already cost.
+
+**The honesty rules, and where they are enforced.** Saturation is `NaN` when nothing reports a capacity, and that
+is kept distinct from `0.0` at every layer: the model, the codec, `/gregscope info` ("n/a"), the Hub ("n/a") and the
+exporter contract. An ME-backed input is not a buffer that can be full; an empty tank with room genuinely is 0%.
+And nothing anywhere is a rate - `flow-meters.md` records why.
+
+**Two things the tests caught in my own work.** The deadband was compared on raw doubles, so a 0.50-to-0.52 ramp
+decoded from permyriad as 0.020000000000000018 and exactly-the-deadband read as a rise; it now compares at the
+ring's resolution. And `TelemetryFrameContractTest.theDocumentedCardinalityIsTheSumOfTheFamilyTables` refused the
+new metric families until the documented per-sensor ceiling moved from 48 to 55 and the totals table was
+recomputed - which is exactly the job that test was written to do.
+
+**One design correction.** The design's section 6 proposed "a per-resource gauge" for the exporter. That would have
+violated the metrics model's own never-labels rule: resource names as labels, on a base with hundreds of machines,
+multiplies series without bound. The exported families are seven single-series gauges instead, and the per-resource
+breakdown stays in the snapshot, the Hub and OpenComputers, where it is read one machine at a time. The **trend is
+not exported either**, on purpose: Prometheus derives direction from a gauge's own history with `deriv()` far
+better than a fixed five-minute enum could.
+
+**Results.** 677 unit tests in 46 classes and 175 in-game tests green on a fresh world. Worst-case batch budget
+6,370 ticks = 318.5 s over 43 batches, against the 600 s CI step.
+
+**Open:** GS-306, ME item stock through a direct network query, which needs an AE2 compile dependency and a class
+guard. Deliberately not smuggled in as a side effect of this milestone.
