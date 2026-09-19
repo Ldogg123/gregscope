@@ -10,6 +10,7 @@ import java.util.UUID;
 import io.github.ldogg123.gregscope.access.AccessPolicy;
 import io.github.ldogg123.gregscope.access.TeamResolver;
 import io.github.ldogg123.gregscope.access.Viewer;
+import io.github.ldogg123.gregscope.buffers.BufferTrend;
 import io.github.ldogg123.gregscope.history.GapRanges;
 import io.github.ldogg123.gregscope.history.MinuteSlot;
 import io.github.ldogg123.gregscope.history.MinuteSource;
@@ -95,6 +96,15 @@ public final class HubViewModel {
 
         /** The section 7.5 rule-3 context: the server runs, and whether the registry has the sensor UNLOADED. */
         GapRanges.Context gapContext(UUID id, long nowEpochSec);
+
+        /**
+         * Which way the sensor's input buffers are going (design-v0.3-buffers section 4), from its second ring.
+         * A default so a host that has no second ring - or predates v0.3 - simply answers "unknown" rather than
+         * every implementation having to say so.
+         */
+        default BufferTrend trend(UUID id, long nowEpochSec) {
+            return BufferTrend.of(null, nowEpochSec, 0);
+        }
 
         /** A host with no history at all: every sensor reads as "no ring". */
         History NONE = new History() {
@@ -437,6 +447,20 @@ public final class HubViewModel {
 
     // --- detail ---
 
+    /** The snapshot's input saturation as the DTO's permyriad, or the sentinel when it is absent or unmeasurable. */
+    private static int saturationPermyriad(Map<String, Object> map) {
+        Object raw = map.get(SnapshotKeys.INPUT_SATURATION);
+        if (!(raw instanceof Number)) {
+            return HubDetail.SATURATION_NONE;
+        }
+        double ratio = ((Number) raw).doubleValue();
+        if (Double.isNaN(ratio)) {
+            return HubDetail.SATURATION_NONE;
+        }
+        double clamped = Math.max(0.0D, Math.min(1.0D, ratio));
+        return (int) Math.round(clamped * HubCodecs.PERMYRIAD_MAX);
+    }
+
     private <T> HubDetail detail(SensorView view, AccessPolicy policy, Viewer viewer, TeamResolver<T> teams,
         History history, int intervalTicks, long nowEpochSec) {
         MachineSnapshot snapshot = view.lastSnapshot();
@@ -463,7 +487,12 @@ public final class HubViewModel {
                 age(view.lastSampleEpochSec(), nowEpochSec),
                 age(view.lastSeenEpochSec(), nowEpochSec),
                 age(view.stateSinceEpochSec(), nowEpochSec))
-            .canEdit(view.state() == SensorState.LIVE && policy.canRename(viewer, view.owner(), teams));
+            .canEdit(view.state() == SensorState.LIVE && policy.canRename(viewer, view.owner(), teams))
+            .inputSaturationPermyriad(saturationPermyriad(map))
+            .trend(
+                history.trend(view.id(), nowEpochSec)
+                    .direction()
+                    .ordinal());
 
         MinuteSource minutes = history.minutes(view.id());
         builder.hasHistory(minutes != null)

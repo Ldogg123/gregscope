@@ -256,6 +256,10 @@ public final class HubPanel {
                 .asWidget()
                 .fullWidth());
         lines.child(
+            IKey.dynamic(() -> detailBuffers(session))
+                .asWidget()
+                .fullWidth());
+        lines.child(
             IKey.dynamic(() -> detailState(session))
                 .asWidget()
                 .fullWidth());
@@ -373,6 +377,25 @@ public final class HubPanel {
             detail.x() + "," + detail.y() + "," + detail.z(),
             Integer.valueOf(detail.side()),
             Labels.shortId(detail.id()));
+    }
+
+    /**
+     * The input buffer line: how full, and which way it is going. Public for the GS-121 width assertion.
+     *
+     * <p>
+     * Reads "in 12% FALLING" - a level and a direction, never a rate. An input that reports no capacity (an
+     * ME-backed one) shows "n/a" rather than 0%, because those are different facts.
+     */
+    public static String detailBuffers(HubSession session) {
+        HubDetail detail = session.detail();
+        if (!detail.isPresent()) {
+            return "";
+        }
+        int saturation = detail.inputSaturationPermyriad();
+        String fill = saturation == HubDetail.SATURATION_NONE ? "n/a"
+            : Math.round(saturation / (double) HubCodecs.PERMYRIAD_MAX * 100.0D) + "%";
+        String trend = local(GregScopeAssets.trendKey(detail.trend()));
+        return format(GregScopeAssets.LANG_HUB_DETAIL_BUFFERS, fill, trend).trim();
     }
 
     /** The state line; public for the same width assertion as {@link #detailIdentity}. */

@@ -26,6 +26,9 @@ public final class HubDetail {
     public static final byte HOUR_GAP = -1;
 
     /** Nothing selected. */
+    /** {@link #inputSaturationPermyriad()} when the machine has no buffer that reports a capacity. */
+    public static final int SATURATION_NONE = 0xFFFF;
+
     public static final HubDetail NONE = builder().build();
 
     private final UUID id;
@@ -52,6 +55,10 @@ public final class HubDetail {
     private final int sampleAgeSeconds;
     private final int seenAgeSeconds;
     private final int stateAgeSeconds;
+    /** v0.3: how full the inputs are, x10000, or {@link #SATURATION_NONE} when nothing reports a capacity. */
+    private final int inputSaturationPermyriad;
+    /** v0.3: the {@code BufferTrend.Direction} ordinal, so the DTO stays primitives only. */
+    private final byte trend;
     private final boolean canEdit;
     private final boolean historyLoaded;
     private final boolean hasHistory;
@@ -84,6 +91,8 @@ public final class HubDetail {
         this.sampleAgeSeconds = b.sampleAgeSeconds;
         this.seenAgeSeconds = b.seenAgeSeconds;
         this.stateAgeSeconds = b.stateAgeSeconds;
+        this.inputSaturationPermyriad = b.inputSaturationPermyriad;
+        this.trend = (byte) b.trend;
         this.canEdit = b.canEdit;
         this.historyLoaded = b.historyLoaded;
         this.hasHistory = b.hasHistory;
@@ -207,6 +216,19 @@ public final class HubDetail {
     /** Seconds in the current availability, or {@link HubCodecs#NO_AGE}. */
     public int stateAgeSeconds() {
         return stateAgeSeconds;
+    }
+
+    /**
+     * How full the machine's inputs are, x10000, or {@link #SATURATION_NONE} for "nothing here reports a capacity".
+     * A <b>level</b>, never a rate: design-v0.3-buffers section 1 has the reasoning.
+     */
+    public int inputSaturationPermyriad() {
+        return inputSaturationPermyriad;
+    }
+
+    /** The {@code BufferTrend.Direction} ordinal of the input buffers over the last five minutes. */
+    public int trend() {
+        return trend & 0xFF;
     }
 
     /** The viewer may write this sensor's label right now (section 9.3's {@code gs_label} preconditions). */
@@ -372,6 +394,9 @@ public final class HubDetail {
         private int sampleAgeSeconds = HubCodecs.NO_AGE;
         private int seenAgeSeconds = HubCodecs.NO_AGE;
         private int stateAgeSeconds = HubCodecs.NO_AGE;
+        private int inputSaturationPermyriad = SATURATION_NONE;
+        private int trend;
+
         private boolean canEdit;
         private boolean historyLoaded;
         private boolean hasHistory;
@@ -472,6 +497,16 @@ public final class HubDetail {
             this.sampleAgeSeconds = sampleAgeSeconds;
             this.seenAgeSeconds = seenAgeSeconds;
             this.stateAgeSeconds = stateAgeSeconds;
+            return this;
+        }
+
+        public Builder inputSaturationPermyriad(int value) {
+            this.inputSaturationPermyriad = value < 0 ? SATURATION_NONE : value;
+            return this;
+        }
+
+        public Builder trend(int ordinal) {
+            this.trend = ordinal;
             return this;
         }
 

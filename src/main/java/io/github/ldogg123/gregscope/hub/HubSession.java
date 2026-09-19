@@ -10,6 +10,7 @@ import io.github.ldogg123.gregscope.GregScope;
 import io.github.ldogg123.gregscope.access.AccessPolicy;
 import io.github.ldogg123.gregscope.access.GtnhlibTeamResolver;
 import io.github.ldogg123.gregscope.access.Viewer;
+import io.github.ldogg123.gregscope.buffers.BufferTrend;
 import io.github.ldogg123.gregscope.history.GapRanges;
 import io.github.ldogg123.gregscope.history.MinuteSource;
 import io.github.ldogg123.gregscope.registry.SensorEntry;
@@ -75,6 +76,9 @@ public final class HubSession {
     private final Viewer access;
     private final UUID hubOwner;
     private final HubViewModel model;
+    /** Five minutes: long enough to be a trend rather than a wobble, short enough to be actionable. */
+    private static final int TREND_WINDOW_SECONDS = 300;
+
     private final RegistryHistory history;
 
     private HubHeader header = HubHeader.EMPTY;
@@ -427,6 +431,12 @@ public final class HubSession {
         public boolean loaded(UUID id) {
             SensorEntry entry = entry(id);
             return entry != null && entry.historyLoaded();
+        }
+
+        @Override
+        public BufferTrend trend(UUID id, long nowEpochSec) {
+            SensorEntry entry = entry(id);
+            return BufferTrend.of(entry == null ? null : entry.seconds(), nowEpochSec, TREND_WINDOW_SECONDS);
         }
 
         @Override

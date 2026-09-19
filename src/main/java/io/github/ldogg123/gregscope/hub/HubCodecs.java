@@ -41,6 +41,9 @@ public final class HubCodecs {
     /** Section 9.3. */
     public static final int MAX_DISPLAY_NAME = 40;
     /** Section 9.3. */
+    /** A saturation off the wire is clamped to 100%, the way the other permyriad fields are. */
+    public static final int PERMYRIAD_MAX = 10_000;
+
     public static final int MAX_STATUS_ID = 64;
     /** Section 9.3. */
     public static final int MAX_STATUS_TEXT = 128;
@@ -380,6 +383,10 @@ public final class HubCodecs {
         sink.writeInt(detail.seenAgeSeconds());
         sink.writeInt(detail.stateAgeSeconds());
         sink.writeByte((detail.canEdit() ? 1 : 0) | (detail.historyLoaded() ? 2 : 0) | (detail.hasHistory() ? 4 : 0));
+        // v0.3 buffers: saturation and the trend ordinal. The seam has no short, and the detail layout is not
+        // size-critical, so the saturation takes an int rather than adding a width to ByteSink for one field.
+        sink.writeInt(detail.inputSaturationPermyriad());
+        sink.writeByte(detail.trend());
         encode(sink, detail.fiveMinutes());
         encode(sink, detail.day());
         for (int i = 0; i < HubDetail.HOURS; i++) {
@@ -425,6 +432,10 @@ public final class HubCodecs {
         builder.canEdit((flags & 1) != 0)
             .historyLoaded((flags & 2) != 0)
             .hasHistory((flags & 4) != 0);
+        int saturation = source.readInt() & 0xFFFF;
+        builder.inputSaturationPermyriad(
+            saturation == HubDetail.SATURATION_NONE ? HubDetail.SATURATION_NONE : Math.min(saturation, PERMYRIAD_MAX));
+        builder.trend(source.readByte() & 0xFF);
         builder.fiveMinutes(decodeWindow(source));
         builder.day(decodeWindow(source));
         byte[] hourly = new byte[HubDetail.HOURS];

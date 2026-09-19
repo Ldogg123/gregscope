@@ -1189,6 +1189,7 @@ public class HubGuiServerTests {
 
         String identityLine = HubPanel.detailIdentity(ui.session);
         String atLine = HubPanel.detailAt(ui.session);
+        String bufferLine = HubPanel.detailBuffers(ui.session);
         String stateLine = HubPanel.detailState(ui.session);
         helper.assertTrue(
             identityLine.length() <= DETAIL_LINE_CHARS,
@@ -1219,7 +1220,13 @@ public class HubGuiServerTests {
                 + atLine);
         Snapshots.log(
             "hubgui#fit",
-            "identity " + identityLine.length() + " / at " + atLine.length() + " / state " + stateLine.length());
+            "identity " + identityLine.length()
+                + " / at "
+                + atLine.length()
+                + " / state "
+                + stateLine.length()
+                + " / buffers "
+                + bufferLine.length());
         helper.succeed();
     }
 

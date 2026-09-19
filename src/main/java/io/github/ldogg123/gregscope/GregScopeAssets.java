@@ -91,6 +91,23 @@ public final class GregScopeAssets {
     public static final String LANG_HUB_DETAIL_WHERE = DOMAIN + ".hub.detail.where";
     /** GS-121: the location half of the identity, split off so neither half wraps in a 260px panel. */
     public static final String LANG_HUB_DETAIL_AT = DOMAIN + ".hub.detail.at";
+    /** v0.3: the input buffer level and which way it is going. */
+    public static final String LANG_HUB_DETAIL_BUFFERS = DOMAIN + ".hub.detail.buffers";
+
+    /** {@code BufferTrend.Direction} ordinal to lang key; "unknown" is deliberately an empty string. */
+    public static String trendKey(int ordinal) {
+        switch (ordinal) {
+            case 0:
+                return DOMAIN + ".hub.trend.rising";
+            case 1:
+                return DOMAIN + ".hub.trend.falling";
+            case 2:
+                return DOMAIN + ".hub.trend.steady";
+            default:
+                return DOMAIN + ".hub.trend.unknown";
+        }
+    }
+
     /** The detail pane's state line: state, status, progress, maintenance, sample age. */
     public static final String LANG_HUB_DETAIL_STATE = DOMAIN + ".hub.detail.state";
     /** The detail pane's energy line: EU/t, stored, capacity. */
