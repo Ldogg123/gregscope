@@ -109,7 +109,10 @@ public final class SampleFolder {
                 maintenance,
                 doubleOf(map, SnapshotKeys.PROGRESS, 0.0),
                 euPerTick,
-                energyStored);
+                energyStored,
+                // Absent (a machine with no buffers) and NaN (buffers with no measurable capacity) are both
+                // "nothing to trend", and the ring stores them the same way.
+                doubleOf(map, SnapshotKeys.INPUT_SATURATION, Double.NaN));
         }
 
         MinuteAccumulator accumulator = entry.accumulator();

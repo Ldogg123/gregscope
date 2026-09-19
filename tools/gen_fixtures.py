@@ -94,7 +94,9 @@ sfields = [
      struct.pack(">B", flags)),
     ("off 7  u8  maintenanceIssues = 2", struct.pack(">B", 2)),
     ("off 8  u16 progress x10000 = 4200", struct.pack(">H", 4200)),
-    ("off 10 u16 reserved = 0", struct.pack(">H", 0)),
+    # v0.3: the byte the layout reserved now carries how full the machine's inputs are, same x10000 encoding as
+    # progress. 0xFFFF means "no buffer here reports a capacity", which is not the same as 0%.
+    ("off 10 u16 inputSaturation x10000 = 7500", struct.pack(">H", 7500)),
     ("off 12 i64 euPerTick = -1920 (generation)", struct.pack(">q", -1920)),
     ("off 20 i64 energyStored = 1200000", struct.pack(">q", 1_200_000)),
 ]
@@ -109,7 +111,7 @@ gfields = [
     ("off 6  u8  flags = 0 (not valid)", struct.pack(">B", 0)),
     ("off 7  u8  maintenanceIssues = 0", struct.pack(">B", 0)),
     ("off 8  u16 progress = 0", struct.pack(">H", 0)),
-    ("off 10 u16 reserved = 0", struct.pack(">H", 0)),
+    ("off 10 u16 inputSaturation = 0xFFFF (a gap second measures nothing)", struct.pack(">H", 0xFFFF)),
     ("off 12 i64 euPerTick = 0", struct.pack(">q", 0)),
     ("off 20 i64 energyStored = 0", struct.pack(">q", 0)),
 ]

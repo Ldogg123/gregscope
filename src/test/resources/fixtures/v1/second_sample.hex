@@ -6,6 +6,6 @@
 ef                                                                      # off 6  u8  flags = 0xef (active, allowedToWork, formedKnown, formed, hasEu, hasEnergy, valid)
 02                                                                      # off 7  u8  maintenanceIssues = 2
 10 68                                                                   # off 8  u16 progress x10000 = 4200
-00 00                                                                   # off 10 u16 reserved = 0
+1d 4c                                                                   # off 10 u16 inputSaturation x10000 = 7500
 ff ff ff ff ff ff f8 80                                                 # off 12 i64 euPerTick = -1920 (generation)
 00 00 00 00 00 12 4f 80                                                 # off 20 i64 energyStored = 1200000

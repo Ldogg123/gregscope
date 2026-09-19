@@ -171,7 +171,8 @@ class SecondRingTest {
             2,
             0.42,
             -1920,
-            1_200_000);
+            1_200_000,
+            0.75);
         byte[] out = new byte[SecondRing.BYTES_PER_SAMPLE];
         ring.encode(0, out, 0);
         assertArrayEquals(golden, out);
@@ -179,6 +180,7 @@ class SecondRingTest {
         SecondRing decoded = new SecondRing();
         decoded.appendEncoded(golden, 0);
         assertEquals(1_759_107_600, decoded.epochSec(0));
+        assertEquals(0.75D, decoded.inputSaturation(0), 1e-9, "the v0.3 saturation byte must survive the round trip");
         assertEquals(StateCodes.RUNNING, decoded.stateCode(0));
         assertEquals(0xEF, decoded.flags(0));
         assertFalse(decoded.hasFlag(0, SecondRing.FLAG_WAS_SHUTDOWN));

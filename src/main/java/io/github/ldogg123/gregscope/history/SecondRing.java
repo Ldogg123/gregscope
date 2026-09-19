@@ -22,12 +22,15 @@ import io.github.ldogg123.gregscope.model.StateCodes;
  *               b7 valid
  *  7  u8   maintenanceIssues (saturating)
  *  8  u16  progress x10000
- * 10  u16  reserved 0
+ * 10  u16  inputSaturation x10000, or 0xFFFF for "no measurable buffer" (v0.3; was reserved)
  * 12  i64  euPerTick (valid if b5)
  * 20  i64  energyStored (valid if b6)
  * </pre>
  */
 public final class SecondRing {
+
+    /** {@code inputSaturation} at offset 10 when the machine has no buffer that reports a capacity. */
+    public static final int SATURATION_NONE = 0xFFFF;
 
     public static final int CAPACITY = 300;
     public static final int BYTES_PER_SAMPLE = 28;
@@ -51,6 +54,7 @@ public final class SecondRing {
     private final byte[] flags = new byte[CAPACITY];
     private final byte[] maintenance = new byte[CAPACITY];
     private final short[] progress = new short[CAPACITY];
+    private final short[] inputSaturation = new short[CAPACITY];
     private final long[] euPerTick = new long[CAPACITY];
     private final long[] energyStored = new long[CAPACITY];
 
@@ -76,6 +80,17 @@ public final class SecondRing {
      */
     public void appendSample(int epochSec, int stateCode, int flags, int maintenanceIssues, double progress,
         long euPerTick, long energyStored) {
+        appendSample(epochSec, stateCode, flags, maintenanceIssues, progress, euPerTick, energyStored, Double.NaN);
+    }
+
+    /**
+     * @param inputSaturation how full the machine's input buffers are, 0.0-1.0, or {@code NaN} when nothing there
+     *                        reports a capacity. Stored in the byte the layout reserved, so the 5-minute trend
+     *                        design-v0.3-buffers section 4 needs costs no extra memory and no format change - the
+     *                        second ring never reaches disk.
+     */
+    public void appendSample(int epochSec, int stateCode, int flags, int maintenanceIssues, double progress,
+        long euPerTick, long energyStored, double inputSaturation) {
         if (!StateCodes.isKnown(stateCode)) {
             throw new IllegalArgumentException("stateCode " + stateCode);
         }
@@ -89,7 +104,8 @@ public final class SecondRing {
             Math.max(0, Math.min(LongMath.U8_MAX, maintenanceIssues)),
             (int) Math.round(clamped * PROGRESS_SCALE),
             (f & FLAG_HAS_EU) != 0 ? euPerTick : 0L,
-            (f & FLAG_HAS_ENERGY) != 0 ? energyStored : 0L);
+            (f & FLAG_HAS_ENERGY) != 0 ? energyStored : 0L,
+            encodeSaturation(inputSaturation));
     }
 
     /** Appends a gap second: state 0, the reason code {@code bit+1}, no flags, zero values. */
@@ -97,12 +113,12 @@ public final class SecondRing {
         if (reason == null || !reason.isStored()) {
             throw new IllegalArgumentException("not a stored gap reason: " + reason);
         }
-        write(epochSec, StateCodes.UNAVAILABLE, reason.secondCode(), 0, 0, 0, 0L, 0L);
+        write(epochSec, StateCodes.UNAVAILABLE, reason.secondCode(), 0, 0, 0, 0L, 0L, SATURATION_NONE);
     }
 
     /**
      * Appends an entry from its 28-byte form (for fixtures and tests). The entry is stored as given, including its
-     * flags; reserved bytes are not kept.
+     * flags and its saturation byte.
      */
     public void appendEncoded(byte[] in, int off) {
         if (off < 0 || off > in.length - BYTES_PER_SAMPLE) {
@@ -116,22 +132,42 @@ public final class SecondRing {
             LongMath.u8(in, off + 7),
             LongMath.u16(in, off + 8),
             LongMath.i64(in, off + 12),
-            LongMath.i64(in, off + 20));
+            LongMath.i64(in, off + 20),
+            LongMath.u16(in, off + 10));
     }
 
-    private void write(int sec, int state, int gap, int f, int maint, int prog, long eu, long energy) {
+    private void write(int sec, int state, int gap, int f, int maint, int prog, long eu, long energy, int saturation) {
         epochSec[head] = sec;
         stateCode[head] = (byte) state;
         gapReason[head] = (byte) gap;
         flags[head] = (byte) f;
         maintenance[head] = (byte) maint;
         progress[head] = (short) prog;
+        inputSaturation[head] = (short) saturation;
         euPerTick[head] = eu;
         energyStored[head] = energy;
         head = (head + 1) % CAPACITY;
         if (size < CAPACITY) {
             size++;
         }
+    }
+
+    /** {@code NaN} becomes {@link #SATURATION_NONE}; anything real is clamped into 0..10000. */
+    private static int encodeSaturation(double ratio) {
+        if (Double.isNaN(ratio)) {
+            return SATURATION_NONE;
+        }
+        double clamped = Math.max(0.0, Math.min(1.0, ratio));
+        return (int) Math.round(clamped * PROGRESS_SCALE);
+    }
+
+    /**
+     * How full the machine's inputs were at sample {@code i}, or {@code NaN} when nothing reported a capacity.
+     * {@code NaN} and {@code 0.0} are different answers: "not measurable" against "empty, with room".
+     */
+    public double inputSaturation(int i) {
+        int raw = inputSaturation[physical(i)] & 0xFFFF;
+        return raw == SATURATION_NONE ? Double.NaN : raw / (double) PROGRESS_SCALE;
     }
 
     /** Physical slot of logical index {@code i} (0 = oldest). */
@@ -202,7 +238,7 @@ public final class SecondRing {
         out[off + 6] = flags[p];
         out[off + 7] = maintenance[p];
         LongMath.putU16(out, off + 8, progress[p] & 0xFFFF);
-        LongMath.putU16(out, off + 10, 0);
+        LongMath.putU16(out, off + 10, inputSaturation[p] & 0xFFFF);
         LongMath.putI64(out, off + 12, euPerTick[p]);
         LongMath.putI64(out, off + 20, energyStored[p]);
     }

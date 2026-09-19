@@ -44,6 +44,7 @@ class ShippedClassesTest {
     private static final List<String> EXPECTED = Arrays.asList(
         // GS-301.
         ROOT + "buffers/BufferReading",
+        ROOT + "buffers/BufferTrend",
         ROOT + "buffers/BufferLines",
         ROOT + "buffers/BufferSet",
         ROOT + "buffers/BufferCollector",

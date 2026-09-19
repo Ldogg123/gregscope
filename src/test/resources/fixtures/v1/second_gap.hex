@@ -5,6 +5,6 @@
 00                                                                      # off 6  u8  flags = 0 (not valid)
 00                                                                      # off 7  u8  maintenanceIssues = 0
 00 00                                                                   # off 8  u16 progress = 0
-00 00                                                                   # off 10 u16 reserved = 0
+ff ff                                                                   # off 10 u16 inputSaturation = 0xFFFF (a gap second measures nothing)
 00 00 00 00 00 00 00 00                                                 # off 12 i64 euPerTick = 0
 00 00 00 00 00 00 00 00                                                 # off 20 i64 energyStored = 0

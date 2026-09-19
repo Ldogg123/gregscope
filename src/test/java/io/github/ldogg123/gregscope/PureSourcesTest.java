@@ -64,6 +64,7 @@ class PureSourcesTest {
     private static final List<String> PURE_CLASSES = Arrays.asList(
         // GS-301: the buffer model is pure so its rules are testable without Minecraft.
         "buffers/BufferReading.java",
+        "buffers/BufferTrend.java",
         "buffers/BufferLines.java",
         "buffers/BufferSet.java",
         "buffers/BufferCollector.java",
