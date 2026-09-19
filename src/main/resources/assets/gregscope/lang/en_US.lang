@@ -61,6 +61,7 @@ gregscope.cmd.info.owner=  Owner: %s, label: %s
 gregscope.cmd.info.state=  State: %s for %s; seen %s ago, sampled %s ago
 gregscope.cmd.info.where=  At: dim %s %s side %s
 gregscope.cmd.info.machine=  Machine: %s (%s, meta %s), last status %s
+gregscope.cmd.info.buffers=  %s: %s  %s
 gregscope.cmd.info.window=  %s: coverage %s, %s samples, running %s, EU/t avg %s, recipes %s
 gregscope.cmd.info.gaps=  Gaps (24 h): %s
 gregscope.cmd.info.gaps.none=  Gaps (24 h): none

@@ -28,6 +28,8 @@ import io.github.ldogg123.gregscope.history.MinuteRing;
 import io.github.ldogg123.gregscope.history.MinuteSlot;
 import io.github.ldogg123.gregscope.history.SizeCeilings;
 import io.github.ldogg123.gregscope.history.Summaries;
+import io.github.ldogg123.gregscope.model.MachineSnapshot;
+import io.github.ldogg123.gregscope.model.SnapshotKeys;
 import io.github.ldogg123.gregscope.model.StateCodes;
 import io.github.ldogg123.gregscope.registry.SensorEntry;
 import io.github.ldogg123.gregscope.registry.SensorRegistry;
@@ -70,7 +72,52 @@ public final class GregScopeCommand extends CommandBase {
     public static final String NAME = "gregscope";
 
     private static final String[] SUBCOMMANDS = { "stats", "list", "info", "label", "purge" };
+
     /** How many gap reasons the 24 h line names before it stops. */
+
+    /**
+     * Design-v0.3-buffers: what the machine is holding, one line per direction, omitted entirely when there is
+     * nothing to say. The percentage is a <b>level</b>, not a rate - GregScope cannot measure throughput - so the
+     * line deliberately reads "Input: 45%" and never anything per second.
+     */
+    private static void sendBuffers(ICommandSender sender, MachineSnapshot snapshot) {
+        if (snapshot == null) {
+            return;
+        }
+        Map<String, Object> map = snapshot.toMap();
+        sendDirection(sender, map, "Input", SnapshotKeys.INPUTS, SnapshotKeys.INPUT_SATURATION);
+        sendDirection(sender, map, "Output", SnapshotKeys.OUTPUTS, SnapshotKeys.OUTPUT_SATURATION);
+    }
+
+    private static void sendDirection(ICommandSender sender, Map<String, Object> map, String label, String linesKey,
+        String saturationKey) {
+        Object raw = map.get(linesKey);
+        if (!(raw instanceof List)) {
+            return;
+        }
+        List<?> lines = (List<?>) raw;
+        Object saturation = map.get(saturationKey);
+        String fill = "-";
+        if (saturation instanceof Number) {
+            double ratio = ((Number) saturation).doubleValue();
+            // NaN means "nothing here reports a capacity", which is not the same as empty and must not read as 0%.
+            fill = Double.isNaN(ratio) ? "n/a" : Math.round(ratio * 100.0D) + "%";
+        }
+        StringBuilder held = new StringBuilder();
+        for (int i = 0; i < lines.size(); i++) {
+            if (i > 0) {
+                held.append(", ");
+            }
+            held.append(lines.get(i));
+        }
+        send(
+            sender,
+            GregScopeAssets.LANG_CMD_INFO_BUFFERS,
+            label,
+            fill,
+            held.length() == 0 ? "empty" : held.toString());
+    }
+
     private static final int MAX_GAP_REASONS = 4;
 
     @Override
@@ -323,6 +370,7 @@ public final class GregScopeCommand extends CommandBase {
             Integer.valueOf(entry.metaId()),
             entry.lastStatusId()
                 .isEmpty() ? "-" : entry.lastStatusId());
+        sendBuffers(sender, entry.lastSnapshot());
         MinuteRing ring = entry.minutes();
         if (ring == null) {
             send(

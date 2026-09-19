@@ -138,6 +138,8 @@ public final class GregScopeAssets {
     public static final String LANG_CMD_INFO_STATE = DOMAIN + ".cmd.info.state";
     public static final String LANG_CMD_INFO_WHERE = DOMAIN + ".cmd.info.where";
     public static final String LANG_CMD_INFO_MACHINE = DOMAIN + ".cmd.info.machine";
+    /** v0.3: one line per direction of the machine's own buffers. */
+    public static final String LANG_CMD_INFO_BUFFERS = DOMAIN + ".cmd.info.buffers";
     /** One per window: the 5-minute and the 24-hour summary of section 7.5. */
     public static final String LANG_CMD_INFO_WINDOW = DOMAIN + ".cmd.info.window";
     public static final String LANG_CMD_INFO_GAPS = DOMAIN + ".cmd.info.gaps";

@@ -17,6 +17,17 @@ class MachineSnapshotTest {
     /** Sets every key, in reverse canonical order. */
     private static MachineSnapshot.Builder fullReversed() {
         return MachineSnapshot.builder()
+            // v0.3 buffers, set here because this fixture's contract is "every key, in reverse", and the test
+            // asserts the built map iterates in SnapshotKeys.ORDER regardless of the order they were set in.
+            .meInputs(2)
+            .outputSaturation(0.25D)
+            .inputSaturation(0.5D)
+            .outputCapacity(32_000L)
+            .inputCapacity(128_000L)
+            .outputTotal(8000L)
+            .inputTotal(4000L)
+            .outputs(Arrays.asList("f:lava=8000/32000"))
+            .inputs(Arrays.asList("f:water=4000/128000"))
             .stuttering(false)
             .outputBlockedTicks(0)
             .recipeCheckResultText("text")

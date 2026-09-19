@@ -2,6 +2,7 @@ package io.github.ldogg123.gregscope.probe;
 
 import javax.annotation.Nullable;
 
+import io.github.ldogg123.gregscope.buffers.BufferSet;
 import io.github.ldogg123.gregscope.model.MachineKind;
 
 /**
@@ -39,6 +40,8 @@ public final class MachineReadings {
 
     private boolean steamPowered;
     private Boolean stuttering;
+    private BufferSet inputs;
+    private BufferSet outputs;
     private Integer outputBlockedTicks;
     private boolean steamVentBlocked;
     private boolean machineErrors;
@@ -293,6 +296,25 @@ public final class MachineReadings {
     @Nullable
     public Boolean stuttering() {
         return stuttering;
+    }
+
+    /** What the machine holds on its input side; null when the walk did not run. */
+    public BufferSet inputs() {
+        return inputs;
+    }
+
+    public MachineReadings inputs(@Nullable BufferSet inputs) {
+        this.inputs = inputs;
+        return this;
+    }
+
+    public BufferSet outputs() {
+        return outputs;
+    }
+
+    public MachineReadings outputs(@Nullable BufferSet outputs) {
+        this.outputs = outputs;
+        return this;
     }
 
     public MachineReadings stuttering(@Nullable Boolean stuttering) {

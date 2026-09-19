@@ -74,6 +74,34 @@ Optional keys are omitted (never `null`) when not applicable. Lua callers must c
 | `outputBlockedTicks` | Integer | single | `mOutputBlocked` (raw counter; see R9). |
 | `stuttering` | Boolean | single | `isStuttering()` (not persisted across reloads). |
 
+### Machine buffers (added in v0.3; schema stays v1)
+
+What the machine is **holding**, read from its own hatches and slots, so it is the same whoever filled them — a GT
+pipe, an EnderIO conduit or an AE2 hatch. Every key here is omitted when that direction has nothing to report, so a
+v0.1 or v0.2 consumer sees exactly what it saw before.
+
+> **These are levels, not rates.** GregScope cannot measure throughput: a level that fell by 500 may be 500
+> consumed, or 1000 consumed while 500 arrived. There is deliberately no per-second key, and
+> [flow-meters.md](flow-meters.md) records why the attempt to add one was abandoned.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `inputs` | List&lt;String&gt; | What the input side holds, biggest first, as `key=amount/capacity`. At most four named, then an `other=<amount>x<count>` rollup, then `me=<count>`. The `/capacity` is **omitted** when the holder reports none (an item slot), because "no capacity" and "a capacity of zero" are different facts. |
+| `outputs` | List&lt;String&gt; | The same for the output side. |
+| `inputTotal` / `outputTotal` | Long | Everything in that direction, including what the rollup covers. |
+| `inputCapacity` / `outputCapacity` | Long | Room across every buffer that reported one; `0` when none did. |
+| `inputSaturation` / `outputSaturation` | Double | `total / capacity`, clamped to `0.0`–`1.0`, or **`NaN`** when nothing reported a capacity. `NaN` and `0.0` mean different things: "not measurable" versus "empty with room". |
+| `meInputs` | Integer | How many inputs are served by an ME network. Present only when non-zero. |
+
+**Resource keys** are `f:<Fluid.getName()>` for a fluid and `i:<registryName>:<meta>` for an item. Numeric IDs are
+never used, because they are pack-dependent and a stored history outlives the pack that produced it.
+
+**ME hatches.** A fluid hatch backed by an ME network reports what the **network** holds, not its local buffer:
+GT's own `getTankInfo` resolves each configured slot against the network with a simulated extraction. Such a hatch
+reports no usable capacity, so it contributes to `inputTotal` but leaves `inputSaturation` unmeasurable — an
+ME-backed input is not a buffer that can be full. ME **item** busses are counted in `meInputs` but contribute no
+amount yet; that needs a direct network query and is tracked as GS-306.
+
 Multiblock `euPerTick` (only computed while active; omitted for GT++ steam multis, Large Boilers and the Heat Exchanger,
 which report steam through `mEUt` and emit no EU):
 

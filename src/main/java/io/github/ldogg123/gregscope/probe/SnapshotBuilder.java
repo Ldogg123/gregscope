@@ -3,6 +3,8 @@ package io.github.ldogg123.gregscope.probe;
 import java.util.ArrayList;
 import java.util.List;
 
+import io.github.ldogg123.gregscope.buffers.BufferLines;
+import io.github.ldogg123.gregscope.buffers.BufferSet;
 import io.github.ldogg123.gregscope.model.MachineKind;
 import io.github.ldogg123.gregscope.model.MachineSnapshot;
 import io.github.ldogg123.gregscope.model.MachineState;
@@ -43,6 +45,8 @@ public final class SnapshotBuilder {
             .maxProgressTicks(r.maxProgressTicks())
             .progress(progress(r.progressTicks(), r.maxProgressTicks()))
             .warnings(warnings(r, c, multi));
+
+        emitBuffers(b, r);
 
         if (r.wasShutdown()) {
             b.shutdownReasonId(r.shutdownReasonId() == null ? StatusIds.NONE : r.shutdownReasonId());
@@ -110,6 +114,30 @@ public final class SnapshotBuilder {
             b.recipeCheckResultText(Text.firstNonEmpty(r.recipeCheckResultText()));
         }
         return b.build();
+    }
+
+    /**
+     * Design-v0.3-buffers section 3. A direction with nothing to report writes nothing, so a machine that holds no
+     * buffers at all looks exactly as it did before v0.3 rather than gaining a row of zeroes.
+     */
+    private static void emitBuffers(MachineSnapshot.Builder b, MachineReadings r) {
+        BufferSet in = r.inputs();
+        if (in != null && !in.isEmpty()) {
+            b.inputs(BufferLines.of(in))
+                .inputTotal(in.totalAmount())
+                .inputCapacity(in.totalCapacity())
+                .inputSaturation(in.saturation());
+            if (in.meBacked() > 0) {
+                b.meInputs(in.meBacked());
+            }
+        }
+        BufferSet out = r.outputs();
+        if (out != null && !out.isEmpty()) {
+            b.outputs(BufferLines.of(out))
+                .outputTotal(out.totalAmount())
+                .outputCapacity(out.totalCapacity())
+                .outputSaturation(out.saturation());
+        }
     }
 
     static double progress(int progressTicks, int maxProgressTicks) {

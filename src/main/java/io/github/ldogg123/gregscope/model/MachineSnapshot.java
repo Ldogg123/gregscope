@@ -243,6 +243,42 @@ public final class MachineSnapshot {
             return put(SnapshotKeys.OUTPUT_BLOCKED_TICKS, outputBlockedTicks);
         }
 
+        public Builder inputs(List<String> lines) {
+            return put(SnapshotKeys.INPUTS, lines);
+        }
+
+        public Builder outputs(List<String> lines) {
+            return put(SnapshotKeys.OUTPUTS, lines);
+        }
+
+        public Builder inputTotal(long amount) {
+            return put(SnapshotKeys.INPUT_TOTAL, amount);
+        }
+
+        public Builder outputTotal(long amount) {
+            return put(SnapshotKeys.OUTPUT_TOTAL, amount);
+        }
+
+        public Builder inputCapacity(long capacity) {
+            return put(SnapshotKeys.INPUT_CAPACITY, capacity);
+        }
+
+        public Builder outputCapacity(long capacity) {
+            return put(SnapshotKeys.OUTPUT_CAPACITY, capacity);
+        }
+
+        public Builder inputSaturation(double ratio) {
+            return put(SnapshotKeys.INPUT_SATURATION, ratio);
+        }
+
+        public Builder outputSaturation(double ratio) {
+            return put(SnapshotKeys.OUTPUT_SATURATION, ratio);
+        }
+
+        public Builder meInputs(int count) {
+            return put(SnapshotKeys.ME_INPUTS, count);
+        }
+
         public Builder stuttering(boolean stuttering) {
             return put(SnapshotKeys.STUTTERING, stuttering);
         }

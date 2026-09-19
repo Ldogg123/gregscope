@@ -21,6 +21,7 @@ import gregtech.common.tileentities.machines.multi.MTELargeBoiler;
 import gregtech.common.tileentities.machines.multi.MTELargeNaquadahReactor;
 import gtPlusPlus.xmod.gregtech.api.metatileentity.implementations.base.MTESteamMultiBlockBase;
 import io.github.ldogg123.gregscope.GregScope;
+import io.github.ldogg123.gregscope.buffers.BufferCollector;
 import io.github.ldogg123.gregscope.model.MachineKind;
 import io.github.ldogg123.gregscope.model.MachineSnapshot;
 import io.github.ldogg123.gregscope.model.StatusIds;
@@ -71,6 +72,7 @@ public final class GregTechMachineProbe implements MachineProbe {
 
         MachineReadings r = new MachineReadings();
         readCommon(r, holder, mte, world, x, y, z);
+        readBuffers(r, mte);
         if (mte instanceof MTEBasicMachine) {
             readBasic(r, holder, (MTEBasicMachine) mte);
         } else {
@@ -128,6 +130,25 @@ public final class GregTechMachineProbe implements MachineProbe {
                     .shutdownCritical(reason.wasCritical())
                     .shutdownReasonText(displayString(reason));
             }
+        }
+    }
+
+    /**
+     * One collector per probe instance, reused across every machine it reads. The probe is only ever touched from
+     * the server thread (the sampler and the OpenComputers callbacks both run there), which is what makes reusing
+     * mutable scratch safe; {@code BufferProbe} resets it at the start of every walk.
+     */
+    private final BufferCollector buffers = new BufferCollector();
+
+    private void readBuffers(MachineReadings r, IMetaTileEntity mte) {
+        if (mte instanceof MTEMultiBlockBase) {
+            MTEMultiBlockBase multi = (MTEMultiBlockBase) mte;
+            r.inputs(BufferProbe.readMultiInputs(multi, buffers));
+            r.outputs(BufferProbe.readMultiOutputs(multi, buffers));
+        } else if (mte instanceof MTEBasicMachine) {
+            MTEBasicMachine basic = (MTEBasicMachine) mte;
+            r.inputs(BufferProbe.readBasicInputs(basic, buffers));
+            r.outputs(BufferProbe.readBasicOutputs(basic, buffers));
         }
     }
 

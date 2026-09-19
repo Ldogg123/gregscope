@@ -53,6 +53,36 @@ public final class SnapshotKeys {
     public static final String OUTPUT_BLOCKED_TICKS = "outputBlockedTicks";
     public static final String STUTTERING = "stuttering";
 
+    // --- v0.3 machine buffers (design-v0.3-buffers section 3). Additive: schema stays v1. ---
+
+    /**
+     * What the machine holds on its input side, as {@code key=amount/capacity} strings, biggest first, at most
+     * {@code BufferCollector.TOP_K} of them plus an {@code other=} rollup. The capacity is omitted when the holder
+     * reports none. A list of strings rather than a nested table because a snapshot value is a scalar or a
+     * {@code List<String>}, and that shape is what every consumer - OpenComputers included - already handles.
+     */
+    public static final String INPUTS = "inputs";
+    /** The same for the output side. */
+    public static final String OUTPUTS = "outputs";
+    /** Everything on the input side, summed, including what the {@code other} rollup covers. */
+    public static final String INPUT_TOTAL = "inputTotal";
+    public static final String OUTPUT_TOTAL = "outputTotal";
+    /** Room across every input buffer that reported one; 0 when none did. */
+    public static final String INPUT_CAPACITY = "inputCapacity";
+    public static final String OUTPUT_CAPACITY = "outputCapacity";
+    /**
+     * How full the input side is, 0.0-1.0, or {@code NaN} when nothing reported a capacity. The number worth
+     * alerting on: falling, on a machine that is running, is a machine about to starve. It is a <b>level</b>, never
+     * a rate - GregScope cannot measure throughput, and section 1 of the design says why.
+     */
+    public static final String INPUT_SATURATION = "inputSaturation";
+    public static final String OUTPUT_SATURATION = "outputSaturation";
+    /**
+     * How many inputs come from an ME network. Their fluids carry real network amounts; their item busses do not
+     * yet, so a non-zero count is also the answer to "why does this machine look empty".
+     */
+    public static final String ME_INPUTS = "meInputs";
+
     /** Canonical key order of every snapshot map. */
     public static final List<String> ORDER = Collections.unmodifiableList(
         Arrays.asList(
@@ -97,7 +127,16 @@ public final class SnapshotKeys {
             RECIPE_CHECK_SUCCESSFUL,
             RECIPE_CHECK_RESULT_TEXT,
             OUTPUT_BLOCKED_TICKS,
-            STUTTERING));
+            STUTTERING,
+            INPUTS,
+            OUTPUTS,
+            INPUT_TOTAL,
+            OUTPUT_TOTAL,
+            INPUT_CAPACITY,
+            OUTPUT_CAPACITY,
+            INPUT_SATURATION,
+            OUTPUT_SATURATION,
+            ME_INPUTS));
 
     /** Keys present on every snapshot. */
     public static final Set<String> REQUIRED = Collections.unmodifiableSet(
