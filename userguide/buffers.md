@@ -60,8 +60,15 @@ Two consequences:
 
 - Such an input shows **`n/a`** rather than a percentage, because "the network" has no capacity to be a fraction
   of. `n/a` and `0%` mean different things and GregScope keeps them apart everywhere.
-- **ME item busses do not report amounts yet.** They are counted, so you can see the input is ME-backed, but the
-  quantity needs a direct query to AE2. Known gap, not a bug.
+- **ME item busses report amounts only through OpenComputers.** `component.gt_machine.getSnapshot()` asks the
+  network how much it holds of each item the bus is configured to stock. The Hub and `/gregscope` do **not** show
+  it: that query costs a data export and a network lookup per configured slot, which is too much to run for every
+  machine every second, so it happens only when a script asks.
+
+!!! warning "Not yet verified against a real ME network"
+    The stocking-bus query is implemented and read-only by construction, but GregScope's automated tests run
+    without AE2, so this specific path has never executed against a real network. If you use it and the numbers
+    look wrong, that is worth reporting.
 
 ## Reading it elsewhere
 

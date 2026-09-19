@@ -91,7 +91,8 @@ public final class GregTechMachineEnvironment extends ManagedEnvironment impleme
     @Callback(
         doc = "function():table -- Read-only GT machine telemetry snapshot (schema v1), or nil and an error message.")
     public Object[] getSnapshot(Context context, Arguments args) {
-        MachineSnapshot snapshot = probe.snapshotAt(world, x, y, z);
+        // Detailed: a script asked, so it can pay for the ME stocking-bus lookup the sampler skips (GS-306).
+        MachineSnapshot snapshot = probe.detailedSnapshotAt(world, x, y, z);
         return snapshot == null ? new Object[] { null, UNAVAILABLE } : new Object[] { snapshot.toMap() };
     }
 

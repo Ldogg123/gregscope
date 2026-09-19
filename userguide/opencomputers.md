@@ -21,6 +21,10 @@ print(snap.inputSaturation)             --> 0.12, or nil when unmeasurable
 : The full machine snapshot — state, the reason it stopped, power, progress, buffers. No sensor required; this
   works on any supported machine behind an Adapter.
 
+    This call is also the **only** place ME stocking-bus amounts appear: asking the network costs a data export
+    and a lookup per configured slot, too much for the per-tick sampler, so the Hub and `/gregscope` omit it and a
+    script that asks directly gets it.
+
 `getSensor()`
 : The sensor record, if the machine has one. `nil, "no sensor"` if it does not.
 

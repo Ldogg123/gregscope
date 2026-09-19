@@ -136,6 +136,8 @@ class ShippedClassesTest {
         // GS-117 assembler recipes: the one postInit registration class (design-v0.2 section 12.1).
         ROOT + "recipe/GregScopeRecipes",
         ROOT + "probe/GregTechMachineProbe",
+        // GS-306: the one class naming AE2, loaded only when an ME bus is present.
+        ROOT + "probe/MeItemProbe",
         ROOT + "probe/StateClassifier",
         ROOT + "model/MachineSnapshot");
 

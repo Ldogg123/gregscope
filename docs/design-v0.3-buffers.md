@@ -196,3 +196,41 @@ better than a fixed five-minute enum could.
 
 **Open:** GS-306, ME item stock through a direct network query, which needs an AE2 compile dependency and a class
 guard. Deliberately not smuggled in as a side effect of this milestone.
+
+
+### GS-306 (2026-09-19): ME stocking-bus item stock
+
+The ME **fluid** side was solved for free in GS-302 - `getTankInfo` already asks the network. Items needed a real
+query, and the routes GT offers are all closed to a mod that will not write to a machine or use reflection:
+
+| Route | Verdict |
+|---|---|
+| `MTEHatchInputBusME.slots` | `protected`. Reflection only. |
+| `updateInformationSlot(int)` | Public, and **writes** `slot.extracted` / `slot.extractedAmount`. |
+| `getStackInSlot` on a stocked slot | Returns `null` outside recipe processing. |
+| `getCopiedData(player)` | **Public, read-only**, and lists the configured stacks under `itemsToStock`. |
+
+So `MeItemProbe` reads the configuration out of the data-stick export and prices each entry against
+`getProxy().getStorage().getItemInventory()` with `extractItems(..., Actionable.SIMULATE, ...)`. SIMULATE takes
+nothing, so the read stays read-only end to end.
+
+**No AE2 dependency was added.** AE2 is already on the compile classpath transitively through GT, and
+`MeItemProbe` is the only class that names an AE2 type. It is referenced from exactly one place - inside the branch
+where `BufferProbe` has already identified an ME bus by class name - and an ME bus cannot exist without AE2, so on
+a pack without it the class is never loaded. Same guard shape as v0.1's Forestry apiary handling.
+
+**It is deliberately off the sampling path.** `getCopiedData` allocates a fresh `NBTTagCompound` and serialises
+every configured stack into it, then each stack costs a network lookup. That is far heavier than the 0.3 us buffer
+walk, and it would run for every machine every sample. `MachineProbe` therefore gained `detailedSnapshotAt`, which
+the OpenComputers machine component calls and the sampler does not: a script that asks can pay, a per-tick loop
+cannot. The asymmetry is documented in the user guide rather than left to be discovered.
+
+**Honest limitation, recorded rather than glossed.** GregScope's Horizon-QA suite runs without AE2, so **this path
+has never executed against a real ME network.** It is read-only by construction and every call is wrapped against a
+downed or unformed network, but "compiles and is structurally safe" is not "verified". Building an ME controller,
+drive, cells and power inside a game test to cover it is possible and was not done. Manual checklist row **M16**
+exists for exactly this, and the user guide carries a warning admonition saying the same thing to players.
+
+**Also not handled:** a bus in auto-pull mode has no fixed configuration - it takes whatever the recipe asks for -
+so there is no list to price and it stays flagged-only. Reporting the whole network instead would be a different
+and much larger claim.

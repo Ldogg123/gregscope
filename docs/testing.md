@@ -1306,6 +1306,12 @@ claim in this project's own documentation rather than a defect in the mod.
 
 The two skips are honest skips, not silent passes: M5 needs a second account, and M11's two-hour soak was not run.
 
+**M16 was added later, by GS-306, and is the one row that covers code with no automated test at all.** The
+stocking-bus query is read-only by construction - it is a SIMULATE extraction and a data-stick export, neither of
+which mutates - but GregScope's Horizon-QA suite runs without AE2, so that path has never executed against a real
+network. Building an ME controller, drive, cells and power inside a game test to cover it is possible and was not
+done; a human with an existing base can verify it in a minute, which is what this row is for.
+
 | # | Check | What to expect | Date | Pack | Result |
 |---|---|---|---|---|---|
 | M1 | Place a sensor on a machine | The overlay renders on the covered face | 2026-09-18 | beta-3 | **pass** - renders correctly |
@@ -1323,6 +1329,7 @@ The two skips are honest skips, not silent passes: M5 needs a second account, an
 | M13 | WAILA on a healthy sensor (GS-REV-1) | Reads "GregScope sensor", never the inert wording | 2026-09-18 | beta-3 | **pass** - reads "machine sensor gregscope sensor" |
 | M14 | A real player attaches a cover past the cap | The player is the owner, and the over-cap chat line appears | 2026-09-18 | beta-3 | **pass** |
 | M15 | An outdoor machine with a sensor on an exposed face, in a thunderstorm (GS-REV-4) | A machine still open to the sky on any other face **still** burns and explodes; a cover only removes its own face from GT's five-face check | 2026-09-18 | beta-3 | **pass after the doc was corrected** - a Macerator with a cover still exploded, which is GT's real behaviour; the claim was wrong, not the mod |
+| M16 | **GS-306, untested in CI.** Put a stocking Input Bus on a multiblock, configure a couple of items, put an OC Adapter on the controller and call `component.gt_machine.getSnapshot()` | `inputs` lists those items with the amounts the **ME network** holds, not the bus's local buffer. `meInputs` is non-zero. Nothing in the base is consumed - the query is a SIMULATE extraction | | | |
 
 **Partly covered already, which is why these are the only manual rows left.** M8's logic is covered by
 `SafetyTests.handshakeRequiresMatchingClient`, which asks FML's own checker; what stays manual is a real connection.

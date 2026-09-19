@@ -50,7 +50,20 @@ public final class GregTechMachineProbe implements MachineProbe {
     }
 
     @Override
+    public MachineSnapshot detailedSnapshotAt(World world, int x, int y, int z) {
+        if (world == null || world.isRemote || !world.blockExists(x, y, z)) {
+            return null;
+        }
+        return snapshot(world.getTileEntity(x, y, z), true);
+    }
+
+    @Override
     public MachineSnapshot snapshot(TileEntity tile) {
+        return snapshot(tile, false);
+    }
+
+    /** @param detailed true to include readings the sampler cannot afford; see {@code detailedSnapshotAt}. */
+    private MachineSnapshot snapshot(TileEntity tile, boolean detailed) {
         if (!(tile instanceof IGregTechTileEntity)) {
             return null;
         }
@@ -72,7 +85,7 @@ public final class GregTechMachineProbe implements MachineProbe {
 
         MachineReadings r = new MachineReadings();
         readCommon(r, holder, mte, world, x, y, z);
-        readBuffers(r, mte);
+        readBuffers(r, mte, detailed);
         if (mte instanceof MTEBasicMachine) {
             readBasic(r, holder, (MTEBasicMachine) mte);
         } else {
@@ -140,10 +153,10 @@ public final class GregTechMachineProbe implements MachineProbe {
      */
     private final BufferCollector buffers = new BufferCollector();
 
-    private void readBuffers(MachineReadings r, IMetaTileEntity mte) {
+    private void readBuffers(MachineReadings r, IMetaTileEntity mte, boolean detailed) {
         if (mte instanceof MTEMultiBlockBase) {
             MTEMultiBlockBase multi = (MTEMultiBlockBase) mte;
-            r.inputs(BufferProbe.readMultiInputs(multi, buffers));
+            r.inputs(BufferProbe.readMultiInputs(multi, buffers, detailed));
             r.outputs(BufferProbe.readMultiOutputs(multi, buffers));
         } else if (mte instanceof MTEBasicMachine) {
             MTEBasicMachine basic = (MTEBasicMachine) mte;

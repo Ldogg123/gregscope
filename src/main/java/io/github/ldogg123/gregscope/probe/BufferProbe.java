@@ -53,11 +53,27 @@ public final class BufferProbe {
 
     private BufferProbe() {}
 
-    /** Reads a multiblock's inputs. The collector is the caller's, reused across machines. */
+    /**
+     * Reads a multiblock's inputs. The collector is the caller's, reused across machines.
+     *
+     * <p>
+     * ME item busses are flagged but not priced. Asking the network what it holds costs an NBT export and a lookup
+     * per configured slot, which does not belong on a path that runs for every machine every sample - see
+     * {@link #readMultiInputs(MTEMultiBlockBase, BufferCollector, boolean)}.
+     */
     public static BufferSet readMultiInputs(MTEMultiBlockBase m, BufferCollector into) {
+        return readMultiInputs(m, into, false);
+    }
+
+    /**
+     * @param includeMeItemStock true to ask the ME network how much of each stocking bus's configured items it
+     *                           holds (GS-306). Only for a caller that a human is waiting on - the Hub, a command,
+     *                           an OpenComputers call - never the sampler.
+     */
+    public static BufferSet readMultiInputs(MTEMultiBlockBase m, BufferCollector into, boolean includeMeItemStock) {
         into.reset();
         readFluidHatches(m.mInputHatches, into);
-        readItemBusses(m.mInputBusses, into);
+        readItemBusses(m.mInputBusses, into, includeMeItemStock);
         return into.build();
     }
 
@@ -65,7 +81,7 @@ public final class BufferProbe {
     public static BufferSet readMultiOutputs(MTEMultiBlockBase m, BufferCollector into) {
         into.reset();
         readFluidHatches(m.mOutputHatches, into);
-        readItemBusses(m.mOutputBusses, into);
+        readItemBusses(m.mOutputBusses, into, false);
         return into.build();
     }
 
@@ -107,7 +123,8 @@ public final class BufferProbe {
         }
     }
 
-    private static void readItemBusses(List<? extends MTEHatch> busses, BufferCollector into) {
+    private static void readItemBusses(List<? extends MTEHatch> busses, BufferCollector into,
+        boolean includeMeItemStock) {
         if (busses == null) {
             return;
         }
@@ -118,6 +135,11 @@ public final class BufferProbe {
             }
             if (isMeBacked(bus)) {
                 into.addMeBacked();
+                if (includeMeItemStock) {
+                    // Loading MeItemProbe here and nowhere else is the AE2 guard: an ME bus cannot exist without
+                    // AE2, so on a pack without it this class is never reached and never loaded.
+                    MeItemProbe.addStock(bus, into);
+                }
                 continue;
             }
             if (!(bus instanceof MTEHatchInputBus) && !(bus instanceof MTEHatchOutputBus)) {
