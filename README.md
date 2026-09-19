@@ -2,6 +2,10 @@
 
 Read-only industrial telemetry for **GregTech: New Horizons**.
 
+**📖 [User guide → ldogg123.github.io/gregscope](https://ldogg123.github.io/gregscope/)** — install, usage,
+commands, configuration and scripting. The `docs/` folder in this repo is the design and testing record, for
+people working *on* GregScope rather than using it.
+
 GregScope answers "what is this machine doing, and why?" for GT machines: running, disabled,
 unformed, power-starved, output-blocked, waiting, or idle — with progress, EU/t, buffered energy,
 and stable reason IDs you can automate against.

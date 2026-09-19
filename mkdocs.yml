@@ -1,0 +1,82 @@
+site_name: GregScope
+site_description: Read-only telemetry for GregTech&#58; New Horizons machines — what every machine is doing, and why it stopped.
+site_url: https://ldogg123.github.io/gregscope/
+repo_url: https://github.com/Ldogg123/gregscope
+repo_name: Ldogg123/gregscope
+edit_uri: edit/master/userguide/
+
+# The user guide only. docs/ holds the design and testing records, which are for people working ON GregScope
+# rather than people using it, and are deliberately not published here.
+docs_dir: userguide
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Follow system
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+
+# A broken internal link is a build failure, not a warning: a docs site whose links rot is worse than no site.
+strict: true
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Machine Sensors: machine-sensors.md
+  - Telemetry Hub: telemetry-hub.md
+  - What a machine is holding: buffers.md
+  - Commands: commands.md
+  - Configuration: configuration.md
+  - OpenComputers: opencomputers.md
+  - Troubleshooting: troubleshooting.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Ldogg123/gregscope
+      name: GregScope on GitHub
